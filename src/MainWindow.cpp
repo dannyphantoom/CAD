@@ -3,6 +3,7 @@
 #include "PropertyPanel.h"
 #include "TreeView.h"
 #include "ToolManager.h"
+#include "KeyBindingDialog.h"
 
 #include <QApplication>
 #include <QMessageBox>
@@ -138,7 +139,7 @@ void MainWindow::createActions()
     connect(m_frontViewAct, &QAction::triggered, this, &MainWindow::frontView);
     
     m_backViewAct = new QAction(tr("&Back View"), this);
-    m_backViewAct->setShortcut(QKeySequence(Qt::CTRL + Qt::Key_1));
+    m_backViewAct->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_1));
     connect(m_backViewAct, &QAction::triggered, this, &MainWindow::backView);
     
     m_leftViewAct = new QAction(tr("&Left View"), this);
@@ -146,7 +147,7 @@ void MainWindow::createActions()
     connect(m_leftViewAct, &QAction::triggered, this, &MainWindow::leftView);
     
     m_rightViewAct = new QAction(tr("&Right View"), this);
-    m_rightViewAct->setShortcut(QKeySequence(Qt::CTRL + Qt::Key_3));
+    m_rightViewAct->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_3));
     connect(m_rightViewAct, &QAction::triggered, this, &MainWindow::rightView);
     
     m_topViewAct = new QAction(tr("&Top View"), this);
@@ -154,7 +155,7 @@ void MainWindow::createActions()
     connect(m_topViewAct, &QAction::triggered, this, &MainWindow::topView);
     
     m_bottomViewAct = new QAction(tr("B&ottom View"), this);
-    m_bottomViewAct->setShortcut(QKeySequence(Qt::CTRL + Qt::Key_7));
+    m_bottomViewAct->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_7));
     connect(m_bottomViewAct, &QAction::triggered, this, &MainWindow::bottomView);
     
     m_isometricViewAct = new QAction(tr("&Isometric View"), this);
@@ -191,6 +192,18 @@ void MainWindow::createActions()
     m_createConeAct = new QAction(QIcon(":/icons/cone.png"), tr("C&one"), this);
     m_createConeAct->setStatusTip(tr("Create a cone primitive"));
     connect(m_createConeAct, &QAction::triggered, this, &MainWindow::createCone);
+    
+    m_createRectangleAct = new QAction(QIcon(":/icons/rectangle.png"), tr("&Rectangle"), this);
+    m_createRectangleAct->setStatusTip(tr("Create a rectangle primitive"));
+    connect(m_createRectangleAct, &QAction::triggered, this, &MainWindow::createRectangle);
+    
+    m_createCircleAct = new QAction(QIcon(":/icons/circle.png"), tr("&Circle"), this);
+    m_createCircleAct->setStatusTip(tr("Create a circle primitive"));
+    connect(m_createCircleAct, &QAction::triggered, this, &MainWindow::createCircle);
+    
+    m_createLineAct = new QAction(QIcon(":/icons/line.png"), tr("&Line"), this);
+    m_createLineAct->setStatusTip(tr("Create a line primitive"));
+    connect(m_createLineAct, &QAction::triggered, this, &MainWindow::createLine);
     
     m_createSketchAct = new QAction(QIcon(":/icons/sketch.png"), tr("S&ketch"), this);
     m_createSketchAct->setStatusTip(tr("Create a 2D sketch"));
@@ -273,6 +286,11 @@ void MainWindow::createActions()
     m_toolboxAct->setChecked(true);
     connect(m_toolboxAct, &QAction::triggered, this, &MainWindow::toggleToolbox);
     
+    // Settings actions
+    m_keyBindingsAct = new QAction(tr("&Key Bindings..."), this);
+    m_keyBindingsAct->setStatusTip(tr("Customize keyboard shortcuts"));
+    connect(m_keyBindingsAct, &QAction::triggered, this, &MainWindow::openKeyBindingDialog);
+    
     // Help actions
     m_aboutAct = new QAction(tr("&About"), this);
     m_aboutAct->setStatusTip(tr("Show the application's About box"));
@@ -332,6 +350,9 @@ void MainWindow::createMenus()
     m_createMenu->addAction(m_createCylinderAct);
     m_createMenu->addAction(m_createSphereAct);
     m_createMenu->addAction(m_createConeAct);
+    m_createMenu->addAction(m_createRectangleAct);
+    m_createMenu->addAction(m_createCircleAct);
+    m_createMenu->addAction(m_createLineAct);
     m_createMenu->addSeparator();
     m_createMenu->addAction(m_createSketchAct);
     
@@ -356,6 +377,10 @@ void MainWindow::createMenus()
     m_toolsMenu->addAction(m_rotateToolAct);
     m_toolsMenu->addAction(m_scaleToolAct);
     m_toolsMenu->addAction(m_extrudeToolAct);
+    
+    // Settings menu
+    m_settingsMenu = menuBar()->addMenu(tr("&Settings"));
+    m_settingsMenu->addAction(m_keyBindingsAct);
     
     // Window menu
     m_windowMenu = menuBar()->addMenu(tr("&Window"));
@@ -403,6 +428,9 @@ void MainWindow::createToolBars()
     m_createToolBar->addAction(m_createCylinderAct);
     m_createToolBar->addAction(m_createSphereAct);
     m_createToolBar->addAction(m_createConeAct);
+    m_createToolBar->addAction(m_createRectangleAct);
+    m_createToolBar->addAction(m_createCircleAct);
+    m_createToolBar->addAction(m_createLineAct);
     m_createToolBar->addSeparator();
     m_createToolBar->addAction(m_unionAct);
     m_createToolBar->addAction(m_differenceAct);
@@ -472,6 +500,17 @@ void MainWindow::setupLayoutAndConnections()
                                   .arg(pos.x(), 0, 'f', 2)
                                   .arg(pos.y(), 0, 'f', 2)
                                   .arg(pos.z(), 0, 'f', 2));
+    });
+    
+    // Connect grid/wireframe/axes toggle signals to update UI actions
+    connect(m_cadViewer, &CADViewer::gridToggled, m_gridAct, &QAction::setChecked);
+    connect(m_cadViewer, &CADViewer::wireframeToggled, m_wireframeAct, &QAction::setChecked);
+    connect(m_cadViewer, &CADViewer::axesToggled, m_axesAct, &QAction::setChecked);
+    
+    // Connect ToolManager to CADViewer for grid control
+    connect(m_toolManager, &ToolManager::gridSizeChanged, m_cadViewer, &CADViewer::setGridSize);
+    connect(m_toolManager, &ToolManager::gridPlaneChanged, this, [this](int plane) {
+        m_cadViewer->setGridPlane(static_cast<GridPlane>(plane));
     });
     
     // Connect tree view signals
@@ -585,10 +624,62 @@ void MainWindow::toggleAxes() {
 }
 
 // Create menu implementations
-void MainWindow::createBox() { m_statusLabel->setText(tr("Create box")); }
-void MainWindow::createCylinder() { m_statusLabel->setText(tr("Create cylinder")); }
-void MainWindow::createSphere() { m_statusLabel->setText(tr("Create sphere")); }
-void MainWindow::createCone() { m_statusLabel->setText(tr("Create cone")); }
+void MainWindow::createBox() { 
+    if (m_cadViewer) {
+        m_cadViewer->setActiveTool(ActiveTool::PLACE_SHAPE);
+        m_cadViewer->setShapeToPlace(ObjectType::PRIMITIVE_BOX);
+        m_statusLabel->setText(tr("Click to place box"));
+    }
+}
+
+void MainWindow::createCylinder() { 
+    if (m_cadViewer) {
+        m_cadViewer->setActiveTool(ActiveTool::PLACE_SHAPE);
+        m_cadViewer->setShapeToPlace(ObjectType::PRIMITIVE_CYLINDER);
+        m_statusLabel->setText(tr("Click to place cylinder"));
+    }
+}
+
+void MainWindow::createSphere() { 
+    if (m_cadViewer) {
+        m_cadViewer->setActiveTool(ActiveTool::PLACE_SHAPE);
+        m_cadViewer->setShapeToPlace(ObjectType::PRIMITIVE_SPHERE);
+        m_statusLabel->setText(tr("Click to place sphere"));
+    }
+}
+
+void MainWindow::createCone() { 
+    if (m_cadViewer) {
+        m_cadViewer->setActiveTool(ActiveTool::PLACE_SHAPE);
+        m_cadViewer->setShapeToPlace(ObjectType::PRIMITIVE_CONE);
+        m_statusLabel->setText(tr("Click to place cone"));
+    }
+}
+
+void MainWindow::createRectangle() { 
+    if (m_cadViewer) {
+        m_cadViewer->setActiveTool(ActiveTool::PLACE_SHAPE);
+        m_cadViewer->setShapeToPlace(ObjectType::PRIMITIVE_RECTANGLE);
+        m_statusLabel->setText(tr("Click and drag to place rectangle"));
+    }
+}
+
+void MainWindow::createCircle() { 
+    if (m_cadViewer) {
+        m_cadViewer->setActiveTool(ActiveTool::PLACE_SHAPE);
+        m_cadViewer->setShapeToPlace(ObjectType::PRIMITIVE_CIRCLE);
+        m_statusLabel->setText(tr("Click and drag to place circle"));
+    }
+}
+
+void MainWindow::createLine() { 
+    if (m_cadViewer) {
+        m_cadViewer->setActiveTool(ActiveTool::PLACE_SHAPE);
+        m_cadViewer->setShapeToPlace(ObjectType::PRIMITIVE_LINE);
+        m_statusLabel->setText(tr("Click and drag to place line"));
+    }
+}
+
 void MainWindow::createSketch() { m_statusLabel->setText(tr("Create sketch")); }
 
 // Mesh menu implementations
@@ -614,6 +705,16 @@ void MainWindow::extrudeTool() { m_statusLabel->setText(tr("Extrude tool active"
 void MainWindow::togglePropertyPanel() { m_propertyDock->setVisible(m_propertyPanelAct->isChecked()); }
 void MainWindow::toggleTreeView() { m_treeDock->setVisible(m_treeViewAct->isChecked()); }
 void MainWindow::toggleToolbox() { m_toolboxDock->setVisible(m_toolboxAct->isChecked()); }
+
+// Settings
+void MainWindow::openKeyBindingDialog()
+{
+    KeyBindingDialog dialog(m_cadViewer, this);
+    if (dialog.exec() == QDialog::Accepted) {
+        // Key bindings are automatically applied in the dialog
+        m_statusLabel->setText(tr("Key bindings updated"));
+    }
+}
 
 void MainWindow::about()
 {

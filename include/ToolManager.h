@@ -11,6 +11,7 @@
 #include <QSpinBox>
 #include <QDoubleSpinBox>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QtCore/QTimer>
 #include <memory>
 
@@ -26,7 +27,10 @@ enum class ToolType {
     EXTRUDE,
     SKETCH,
     MEASURE,
-    SECTION
+    SECTION,
+    PLACE_SHAPE,
+    EXTRUDE_2D,
+    ERASER
 };
 
 enum class SnapMode {
@@ -61,6 +65,10 @@ public:
     
     void setAngleSnapIncrement(float degrees);
     float getAngleSnapIncrement() const { return m_angleSnapIncrement; }
+    
+    // Grid plane control
+    void setGridPlane(int plane); // 0=XY, 1=XZ, 2=YZ
+    int getGridPlane() const { return m_gridPlane; }
 
 signals:
     void toolChanged(ToolType tool);
@@ -68,6 +76,7 @@ signals:
     void gridSizeChanged(float size);
     void angleSnapChanged(bool enabled);
     void angleSnapIncrementChanged(float degrees);
+    void gridPlaneChanged(int plane);
     void parametersChanged();
 
 private slots:
@@ -76,6 +85,7 @@ private slots:
     void onGridSizeChanged();
     void onAngleSnapToggled(bool enabled);
     void onAngleSnapIncrementChanged();
+    void onGridPlaneChanged();
     void onToolParametersChanged();
 
 private:
@@ -120,6 +130,8 @@ private:
     QVBoxLayout* m_gridLayout;
     QLabel* m_gridSizeLabel;
     QDoubleSpinBox* m_gridSizeSpin;
+    QLabel* m_gridPlaneLabel;
+    QComboBox* m_gridPlaneCombo;
     
     // Angle controls
     QGroupBox* m_angleGroup;
@@ -167,6 +179,7 @@ private:
     float m_gridSize;
     bool m_angleSnap;
     float m_angleSnapIncrement;
+    int m_gridPlane;
     
     // Helper methods
     void setToolButtonIcon(QToolButton* button, ToolType tool);

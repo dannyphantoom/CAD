@@ -10,6 +10,7 @@ ToolManager::ToolManager(QWidget *parent)
     , m_gridSize(1.0f)
     , m_angleSnap(false)
     , m_angleSnapIncrement(15.0f)
+    , m_gridPlane(0) // XY plane
 {
     setupUI();
 }
@@ -56,6 +57,14 @@ void ToolManager::setAngleSnapIncrement(float degrees) {
     }
 }
 
+void ToolManager::setGridPlane(int plane) {
+    if (m_gridPlane != plane) {
+        m_gridPlane = plane;
+        m_gridPlaneCombo->setCurrentIndex(plane);
+        emit gridPlaneChanged(plane);
+    }
+}
+
 void ToolManager::onToolButtonClicked() {
     QToolButton* button = qobject_cast<QToolButton*>(sender());
     if (!button) return;
@@ -82,6 +91,10 @@ void ToolManager::onAngleSnapToggled(bool enabled) {
 
 void ToolManager::onAngleSnapIncrementChanged() {
     setAngleSnapIncrement(m_angleIncrementSpin->value());
+}
+
+void ToolManager::onGridPlaneChanged() {
+    setGridPlane(m_gridPlaneCombo->currentIndex());
 }
 
 void ToolManager::onToolParametersChanged() {
@@ -147,6 +160,22 @@ void ToolManager::createToolButtons() {
     m_sectionButton->setCheckable(true);
     m_toolButtonGroup->addButton(m_sectionButton, static_cast<int>(ToolType::SECTION));
     
+    // Add new tool buttons
+    QToolButton* m_placeShapeButton = new QToolButton(this);
+    m_placeShapeButton->setText("Place Shape");
+    m_placeShapeButton->setCheckable(true);
+    m_toolButtonGroup->addButton(m_placeShapeButton, static_cast<int>(ToolType::PLACE_SHAPE));
+    
+    QToolButton* m_extrude2DButton = new QToolButton(this);
+    m_extrude2DButton->setText("Extrude 2D");
+    m_extrude2DButton->setCheckable(true);
+    m_toolButtonGroup->addButton(m_extrude2DButton, static_cast<int>(ToolType::EXTRUDE_2D));
+    
+    QToolButton* m_eraserButton = new QToolButton(this);
+    m_eraserButton->setText("Eraser");
+    m_eraserButton->setCheckable(true);
+    m_toolButtonGroup->addButton(m_eraserButton, static_cast<int>(ToolType::ERASER));
+    
     // Add buttons to layout
     m_toolLayout->addWidget(m_selectButton);
     m_toolLayout->addWidget(m_moveButton);
@@ -156,6 +185,9 @@ void ToolManager::createToolButtons() {
     m_toolLayout->addWidget(m_sketchButton);
     m_toolLayout->addWidget(m_measureButton);
     m_toolLayout->addWidget(m_sectionButton);
+    m_toolLayout->addWidget(m_placeShapeButton);
+    m_toolLayout->addWidget(m_extrude2DButton);
+    m_toolLayout->addWidget(m_eraserButton);
     
     m_mainLayout->addWidget(m_toolGroup);
     
@@ -232,14 +264,25 @@ void ToolManager::createGridControls() {
     m_gridSizeSpin->setValue(m_gridSize);
     m_gridSizeSpin->setSingleStep(0.1);
     
+    m_gridPlaneLabel = new QLabel("Grid Plane:", this);
+    m_gridPlaneCombo = new QComboBox(this);
+    m_gridPlaneCombo->addItem("XY Plane");
+    m_gridPlaneCombo->addItem("XZ Plane");
+    m_gridPlaneCombo->addItem("YZ Plane");
+    m_gridPlaneCombo->setCurrentIndex(m_gridPlane);
+    
     m_gridLayout->addWidget(m_gridSizeLabel);
     m_gridLayout->addWidget(m_gridSizeSpin);
+    m_gridLayout->addWidget(m_gridPlaneLabel);
+    m_gridLayout->addWidget(m_gridPlaneCombo);
     
     m_mainLayout->addWidget(m_gridGroup);
     
     // Connect signals
     connect(m_gridSizeSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
             this, &ToolManager::onGridSizeChanged);
+    connect(m_gridPlaneCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &ToolManager::onGridPlaneChanged);
 }
 
 void ToolManager::createAngleControls() {

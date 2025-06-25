@@ -31,6 +31,7 @@ set(SOURCES
     src/ToolManager.cpp
     src/PropertyPanel.cpp
     src/TreeView.cpp
+    src/KeyBindingDialog.cpp
 )
 
 # Header files
@@ -44,6 +45,7 @@ set(HEADERS
     include/PropertyPanel.h
     include/TreeView.h
     include/CADTypes.h
+    include/KeyBindingDialog.h
 )
 
 # Process Qt resources

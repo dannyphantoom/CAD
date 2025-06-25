@@ -72,6 +72,9 @@ private slots:
     void createCylinder();
     void createSphere();
     void createCone();
+    void createRectangle();
+    void createCircle();
+    void createLine();
     void createSketch();
     
     // Mesh menu actions
@@ -97,6 +100,9 @@ private slots:
     void togglePropertyPanel();
     void toggleTreeView();
     void toggleToolbox();
+    
+    // Settings
+    void openKeyBindingDialog();
     
     // Help
     void about();
@@ -132,6 +138,7 @@ private:
     QMenu *m_meshMenu;
     QMenu *m_booleanMenu;
     QMenu *m_toolsMenu;
+    QMenu *m_settingsMenu;
     QMenu *m_windowMenu;
     QMenu *m_helpMenu;
     QMenu *m_recentFilesMenu;
@@ -181,6 +188,9 @@ private:
     QAction *m_createCylinderAct;
     QAction *m_createSphereAct;
     QAction *m_createConeAct;
+    QAction *m_createRectangleAct;
+    QAction *m_createCircleAct;
+    QAction *m_createLineAct;
     QAction *m_createSketchAct;
     
     // Actions - Mesh
@@ -201,6 +211,9 @@ private:
     QAction *m_rotateToolAct;
     QAction *m_scaleToolAct;
     QAction *m_extrudeToolAct;
+    
+    // Actions - Settings
+    QAction *m_keyBindingsAct;
     
     // Actions - Window
     QAction *m_propertyPanelAct;
