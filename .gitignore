@@ -1,0 +1,112 @@
+# Build directories
+build/
+build-*/
+out/
+cmake-build-*/
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+*.cmake
+
+# Qt MOC files
+moc_*.cpp
+moc_*.h
+qrc_*.cpp
+ui_*.h
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+HybridCAD
+HybridCAD.exe
+
+# Qt Creator
+*.pro.user
+*.pro.user.*
+*.qbs.user
+*.qbs.user.*
+CMakeLists.txt.user*
+
+# Qt
+*.qmlc
+*.jsc
+Makefile*
+*build-*
+
+# Visual Studio
+.vs/
+*.vcxproj*
+*.sln
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Xcode
+*.xcodeproj/
+*.xcworkspace/
+
+# macOS
+.DS_Store
+*.app
+
+# Temporary files
+*~
+*.tmp
+*.temp
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Generated files
+version.h
+config.h
+
+# Log files
+*.log
+
+# Package files
+*.deb
+*.rpm
+*.tar.gz
+*.zip
+
+# OpenCASCADE
+*.brep
+*.step
+*.stp
+*.iges
+*.igs
+
+# Documentation
+docs/html/
+docs/latex/
+*.pdf
+
+# Backup files
+*.bak
+*.backup 

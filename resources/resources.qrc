@@ -1,0 +1,22 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+    <qresource prefix="/icons">
+        <!-- Placeholder for future icon files -->
+        <!-- Add icon files here when they become available -->
+    </qresource>
+    
+    <qresource prefix="/shaders">
+        <!-- Placeholder for future shader files -->
+        <!-- Add shader files here when they become available -->
+    </qresource>
+    
+    <qresource prefix="/i18n">
+        <!-- Placeholder for future translation files -->
+        <!-- Add translation files here when they become available -->
+    </qresource>
+    
+    <qresource prefix="/docs">
+        <!-- Placeholder for future documentation files -->
+        <!-- Add documentation files here when they become available -->
+    </qresource>
+</RCC> 
