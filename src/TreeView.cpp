@@ -369,6 +369,7 @@ QString TreeView::getObjectTypeName(ObjectType type) const {
         case ObjectType::PRIMITIVE_CYLINDER: return "Cylinder";
         case ObjectType::PRIMITIVE_SPHERE: return "Sphere";
         case ObjectType::PRIMITIVE_CONE: return "Cone";
+        case ObjectType::PRIMITIVE_LINE: return "Line";
         case ObjectType::SKETCH: return "Sketch";
         case ObjectType::EXTRUSION: return "Extrusion";
         case ObjectType::REVOLUTION: return "Revolution";

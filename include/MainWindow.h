@@ -74,7 +74,7 @@ private slots:
     void createCone();
     void createRectangle();
     void createCircle();
-    void createLine();
+    void createLine(); // New action for creating a line
     void createSketch();
     
     // Mesh menu actions
@@ -103,9 +103,13 @@ private slots:
     
     // Settings
     void openKeyBindingDialog();
+    void openPreferencesDialog();
     
     // Help
     void about();
+
+private slots:
+    void updateStatusMessage(const QString& message);
 
 private:
     void createActions();
@@ -190,7 +194,7 @@ private:
     QAction *m_createConeAct;
     QAction *m_createRectangleAct;
     QAction *m_createCircleAct;
-    QAction *m_createLineAct;
+    QAction *m_createLineAct; // New action for creating a line
     QAction *m_createSketchAct;
     
     // Actions - Mesh
@@ -214,6 +218,7 @@ private:
     
     // Actions - Settings
     QAction *m_keyBindingsAct;
+    QAction *m_preferencesAct;
     
     // Actions - Window
     QAction *m_propertyPanelAct;

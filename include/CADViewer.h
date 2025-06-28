@@ -12,12 +12,18 @@
 #include <QKeyEvent>
 #include <QSettings>
 #include <QMap>
+#include <QMenu>
+#include <QAction>
 #include <memory>
 #include <array>
 
 #include "CADTypes.h"
 
 namespace HybridCAD {
+
+// Forward declarations
+enum class SnapMode;
+class ToolManager;
 
 class GeometryManager;
 class MeshManager;
@@ -62,6 +68,7 @@ enum class PlacementState {
     NONE,
     SELECTING_SHAPE,
     SETTING_START_POINT,
+    WAITING_FOR_SECOND_CLICK,
     SETTING_END_POINT,
     PLACING,
     DRAGGING_TO_SIZE
@@ -119,7 +126,8 @@ enum class KeyAction {
     SKETCH_LINE,
     SKETCH_RECTANGLE,
     SKETCH_CIRCLE,
-    CANCEL_CURRENT_ACTION
+    CANCEL_CURRENT_ACTION,
+    MOVE_OBJECT // New action for moving an object
 };
 
 class CADViewer : public QOpenGLWidget, protected QOpenGLFunctions
@@ -146,6 +154,10 @@ public:
     void setCameraSpeed(float speed) { m_cameraSpeed = speed; }
     float getCameraSpeed() const { return m_cameraSpeed; }
     
+    // Mouse sensitivity control
+    void setMouseSensitivity(float sensitivity) { m_mouseSensitivity = sensitivity; }
+    float getMouseSensitivity() const { return m_mouseSensitivity; }
+    
     // View settings
     void setWireframeMode(bool enabled);
     void setGridVisible(bool visible);
@@ -167,7 +179,10 @@ public:
     // Snap functionality
     void setSnapToGrid(bool enabled);
     bool isSnapToGrid() const { return m_snapToGrid; }
+    void setSnapMode(SnapMode mode);
+    SnapMode getSnapMode() const { return m_currentSnapMode; }
     QVector3D snapToGrid(const QVector3D& position) const;
+    QVector3D applySnapping(const QVector3D& position, const QPoint& screenPos = QPoint()) const;
     
     // Shape placement workflow
     void setActiveTool(ActiveTool tool);
@@ -238,6 +253,11 @@ signals:
     void gridToggled(bool visible);
     void wireframeToggled(bool enabled);
     void axesToggled(bool visible);
+    void statusMessageChanged(const QString& message);
+    void showContextMenu(const QPoint& pos);
+    void deleteRequested(CADObjectPtr object);
+    void reshapeRequested(CADObjectPtr object);
+    void padRequested(CADObjectPtr object);
 
 protected:
     // OpenGL overrides
@@ -255,6 +275,11 @@ protected:
 
 private slots:
     void animate();
+    void showObjectContextMenu(const QPoint& pos);
+    void deleteSelectedObject();
+    void reshapeSelectedObject();
+    void padSelectedObject();
+    void moveSelectedObject();
 
 private:
     void setupShaders();
@@ -262,13 +287,14 @@ private:
     void updateMatrices();
     void setupNavigationCube();
     void setupDefaultKeyBindings();
+    void setupContextMenu();
     
     // Rendering methods
     void renderGrid();
     void renderMultiPlaneGrid();
     void renderAxes();
     void renderObjects();
-    void renderSelectionOutline();
+    void renderSelectionOutline(CADObjectPtr object);
     void renderPlacementPreview();
     void renderExtrusionPreview();
     void renderEraserPreview();
@@ -289,6 +315,7 @@ private:
     
     // Shape placement methods
     void handleShapePlacementClick(const QPoint& screenPos);
+    void handleEraserPlacementClick(const QPoint& screenPos);
     void updatePlacementPreview(const QPoint& screenPos);
     CADObjectPtr createShapeAtPoints(ObjectType shapeType, const QVector3D& startPoint, const QVector3D& endPoint);
     
@@ -306,6 +333,8 @@ private:
     // Eraser methods
     void handleEraserClick(const QPoint& screenPos);
     void performBooleanSubtraction(CADObjectPtr target, CADObjectPtr eraser);
+    bool objectsIntersect(CADObjectPtr obj1, CADObjectPtr obj2);
+    bool objectContainsObject(CADObjectPtr outer, CADObjectPtr inner);
     
     // Grid rendering
     void renderGridPlane(GridPlane plane);
@@ -322,6 +351,14 @@ private:
     // Key action handling
     void executeKeyAction(KeyAction action);
     KeyAction getKeyActionFromEvent(QKeyEvent* event) const;
+    
+    // Snap helper methods
+    QVector3D snapToVertex(const QVector3D& position) const;
+    QVector3D snapToEdge(const QVector3D& position, const QPoint& screenPos) const;
+    QVector3D snapToFace(const QVector3D& position, const QPoint& screenPos) const;
+    QVector3D snapToCenter(const QVector3D& position) const;
+    QVector3D snapToMidpoint(const QVector3D& position) const;
+    QVector3D closestPointOnLine(const QVector3D& point, const QVector3D& lineStart, const QVector3D& lineEnd) const;
 
     // Camera state
     QVector3D m_cameraPosition;
@@ -331,6 +368,7 @@ private:
     float m_cameraRotationX;
     float m_cameraRotationY;
     float m_cameraSpeed;
+    float m_mouseSensitivity;
     
     // Keyboard state for continuous movement
     QSet<int> m_pressedKeys;
@@ -348,6 +386,7 @@ private:
     bool m_snapToGrid;
     bool m_showMultiPlaneGrid;
     std::array<bool, 3> m_visibleGridPlanes;
+    SnapMode m_currentSnapMode;
     
     // Tool state
     ActiveTool m_activeTool;
@@ -414,12 +453,21 @@ private:
     QMap<KeyAction, QKeySequence> m_keyBindings;
     QSettings* m_settings;
     
+    // Context menu system
+    QMenu* m_contextMenu;
+    QAction* m_deleteAction;
+    QAction* m_reshapeAction;
+    QAction* m_padAction;
+    QAction* m_moveAction; // New action for moving
+    CADObjectPtr m_contextMenuObject;
+    
     // Constants
     static constexpr float DEFAULT_GRID_SIZE = 1.0f;
     static constexpr float CAMERA_ZOOM_SPEED = 0.1f;
     static constexpr float CAMERA_DISTANCE_MIN = 0.5f;
     static constexpr float CAMERA_DISTANCE_MAX = 100.0f;
     static constexpr float DEFAULT_CAMERA_SPEED = 5.0f;
+    static constexpr float DEFAULT_MOUSE_SENSITIVITY = 1.0f;
 };
 
 } // namespace HybridCAD 

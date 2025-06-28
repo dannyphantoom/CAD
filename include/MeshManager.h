@@ -99,8 +99,8 @@ public:
     void removeUnusedVertices();
     
     // Bounding box
-    Point3D getBoundingBoxMin() const;
-    Point3D getBoundingBoxMax() const;
+    Point3D getBoundingBoxMin() const override;
+    Point3D getBoundingBoxMax() const override;
 
 protected:
     std::vector<Vertex> m_vertices;

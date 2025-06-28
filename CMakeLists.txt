@@ -32,6 +32,8 @@ set(SOURCES
     src/PropertyPanel.cpp
     src/TreeView.cpp
     src/KeyBindingDialog.cpp
+    src/PreferencesDialog.cpp
+    src/NavigationCube.cpp
 )
 
 # Header files
@@ -46,6 +48,7 @@ set(HEADERS
     include/TreeView.h
     include/CADTypes.h
     include/KeyBindingDialog.h
+    include/PreferencesDialog.h
 )
 
 # Process Qt resources

@@ -44,9 +44,9 @@ enum class ObjectType {
     PRIMITIVE_SPHERE,
     PRIMITIVE_CONE,
     // 2D shapes
+    PRIMITIVE_LINE, // New Line primitive
     PRIMITIVE_RECTANGLE,
     PRIMITIVE_CIRCLE,
-    PRIMITIVE_LINE,
     PRIMITIVE_POLYGON,
     SKETCH,
     EXTRUSION,
@@ -87,13 +87,18 @@ struct Material {
 // Base class for all CAD objects
 class CADObject {
 public:
-    CADObject(const std::string& name = "Object") 
-        : m_name(name), m_visible(true), m_selected(false) {}
+    CADObject(const std::string& name = "Object", CADObject* parent = nullptr) 
+        : m_name(name), m_visible(true), m_selected(false), m_parent(parent) {}
     virtual ~CADObject() = default;
+
+    CADObject* getParent() const { return m_parent; }
+    void setParent(CADObject* parent) { m_parent = parent; }
     
     virtual ObjectType getType() const = 0;
     virtual void render() const = 0;
     virtual bool intersects(const Point3D& rayOrigin, const Vector3D& rayDirection) const = 0;
+    virtual Point3D getBoundingBoxMin() const = 0;
+    virtual Point3D getBoundingBoxMax() const = 0;
     
     const std::string& getName() const { return m_name; }
     void setName(const std::string& name) { m_name = name; }
@@ -112,6 +117,7 @@ protected:
     bool m_visible;
     bool m_selected;
     Material m_material;
+    CADObject* m_parent;
 };
 
 using CADObjectPtr = std::shared_ptr<CADObject>;

@@ -70,7 +70,10 @@ void PropertyPanel::onMaterialChanged() {
     // Update material properties based on UI controls
     Material material = m_currentObject->getMaterial();
     
-    // Update the material (implementation would read from UI controls)
+    material.name = m_materialNameEdit->text().toStdString();
+    material.shininess = m_shininessSlider->value();
+    material.transparency = m_transparencySlider->value() / 100.0f;
+
     m_currentObject->setMaterial(material);
     
     emit propertyChanged();
@@ -175,6 +178,7 @@ void PropertyPanel::createGeneralProperties() {
     m_typeCombo->addItem("Cylinder");
     m_typeCombo->addItem("Sphere");
     m_typeCombo->addItem("Cone");
+    m_typeCombo->addItem("Line");
     m_typeCombo->addItem("Mesh");
     m_typeCombo->addItem("Assembly");
     m_typeCombo->setEnabled(false); // Type is read-only
@@ -352,8 +356,9 @@ void PropertyPanel::updateGeneralProperties() {
         case ObjectType::PRIMITIVE_CYLINDER: m_typeCombo->setCurrentIndex(2); break;
         case ObjectType::PRIMITIVE_SPHERE: m_typeCombo->setCurrentIndex(3); break;
         case ObjectType::PRIMITIVE_CONE: m_typeCombo->setCurrentIndex(4); break;
-        case ObjectType::MESH: m_typeCombo->setCurrentIndex(5); break;
-        case ObjectType::ASSEMBLY: m_typeCombo->setCurrentIndex(6); break;
+        case ObjectType::PRIMITIVE_LINE: m_typeCombo->setCurrentIndex(5); break;
+        case ObjectType::MESH: m_typeCombo->setCurrentIndex(6); break;
+        case ObjectType::ASSEMBLY: m_typeCombo->setCurrentIndex(7); break;
         default: m_typeCombo->setCurrentIndex(0); break;
     }
 }

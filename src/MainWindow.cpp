@@ -4,6 +4,7 @@
 #include "TreeView.h"
 #include "ToolManager.h"
 #include "KeyBindingDialog.h"
+#include "PreferencesDialog.h"
 
 #include <QApplication>
 #include <QMessageBox>
@@ -291,6 +292,10 @@ void MainWindow::createActions()
     m_keyBindingsAct->setStatusTip(tr("Customize keyboard shortcuts"));
     connect(m_keyBindingsAct, &QAction::triggered, this, &MainWindow::openKeyBindingDialog);
     
+    m_preferencesAct = new QAction(tr("&Preferences..."), this);
+    m_preferencesAct->setStatusTip(tr("Configure application settings"));
+    connect(m_preferencesAct, &QAction::triggered, this, &MainWindow::openPreferencesDialog);
+    
     // Help actions
     m_aboutAct = new QAction(tr("&About"), this);
     m_aboutAct->setStatusTip(tr("Show the application's About box"));
@@ -380,6 +385,8 @@ void MainWindow::createMenus()
     
     // Settings menu
     m_settingsMenu = menuBar()->addMenu(tr("&Settings"));
+    m_settingsMenu->addAction(m_preferencesAct);
+    m_settingsMenu->addSeparator();
     m_settingsMenu->addAction(m_keyBindingsAct);
     
     // Window menu
@@ -513,6 +520,34 @@ void MainWindow::setupLayoutAndConnections()
         m_cadViewer->setGridPlane(static_cast<GridPlane>(plane));
     });
     
+    // Connect ToolManager tool changes to CADViewer
+    connect(m_toolManager, &ToolManager::toolChanged, this, [this](ToolType tool) {
+        switch (tool) {
+            case ToolType::PLACE_SHAPE:
+                m_cadViewer->setActiveTool(ActiveTool::PLACE_SHAPE);
+                break;
+            case ToolType::ERASER:
+                m_cadViewer->setActiveTool(ActiveTool::ERASER);
+                m_cadViewer->setEraserMode(true);
+                break;
+            case ToolType::EXTRUDE_2D:
+                m_cadViewer->setActiveTool(ActiveTool::EXTRUDE_2D);
+                break;
+            case ToolType::SKETCH:
+                m_cadViewer->setActiveTool(ActiveTool::SKETCH_LINE);
+                break;
+            default:
+                m_cadViewer->setActiveTool(ActiveTool::SELECT);
+                m_cadViewer->setEraserMode(false);
+                break;
+        }
+    });
+    
+    // Connect ToolManager snap mode changes to CADViewer
+    connect(m_toolManager, &ToolManager::snapModeChanged, this, [this](SnapMode mode) {
+        m_cadViewer->setSnapMode(mode);
+    });
+    
     // Connect tree view signals
     connect(m_treeView, &TreeView::objectSelected, m_cadViewer, &CADViewer::selectObject);
     connect(m_treeView, &TreeView::objectSelected, m_propertyPanel, &PropertyPanel::setSelectedObject);
@@ -521,6 +556,7 @@ void MainWindow::setupLayoutAndConnections()
     connect(m_propertyDock, &QDockWidget::visibilityChanged, m_propertyPanelAct, &QAction::setChecked);
     connect(m_treeDock, &QDockWidget::visibilityChanged, m_treeViewAct, &QAction::setChecked);
     connect(m_toolboxDock, &QDockWidget::visibilityChanged, m_toolboxAct, &QAction::setChecked);
+    connect(m_cadViewer, &CADViewer::statusMessageChanged, this, &MainWindow::updateStatusMessage);
 }
 
 // File menu implementations
@@ -672,11 +708,11 @@ void MainWindow::createCircle() {
     }
 }
 
-void MainWindow::createLine() { 
+void MainWindow::createLine() {
     if (m_cadViewer) {
-        m_cadViewer->setActiveTool(ActiveTool::PLACE_SHAPE);
-        m_cadViewer->setShapeToPlace(ObjectType::PRIMITIVE_LINE);
-        m_statusLabel->setText(tr("Click and drag to place line"));
+        m_cadViewer->setActiveTool(ActiveTool::SKETCH_LINE);
+        m_cadViewer->startLineSketch();
+        m_statusLabel->setText(tr("Click to start line, click again to end"));
     }
 }
 
@@ -716,6 +752,15 @@ void MainWindow::openKeyBindingDialog()
     }
 }
 
+void MainWindow::openPreferencesDialog()
+{
+    PreferencesDialog dialog(m_cadViewer, this);
+    if (dialog.exec() == QDialog::Accepted) {
+        // Preferences are automatically applied in the dialog
+        m_statusLabel->setText(tr("Preferences updated"));
+    }
+}
+
 void MainWindow::about()
 {
     QMessageBox::about(this, tr("About HybridCAD"),
@@ -742,6 +787,11 @@ void MainWindow::setCurrentFile(const QString &fileName)
 QString MainWindow::strippedName(const QString &fullFileName)
 {
     return QFileInfo(fullFileName).fileName();
+}
+
+void MainWindow::updateStatusMessage(const QString& message)
+{
+    m_statusLabel->setText(message);
 }
 
 } // namespace HybridCAD 

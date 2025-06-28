@@ -52,6 +52,20 @@ void Assembly::addPart(CADObjectPtr part, const std::string& instanceName) {
     
     PartInstance instance(part, name);
     m_partInstances.push_back(instance);
+    
+    // Set the parent of the added part
+    part->setParent(this);
+    
+    // If this assembly is nested, make it transparent and the added part opaque
+    if (getParent()) {
+        Material assemblyMaterial = getMaterial();
+        assemblyMaterial.transparency = 0.5f; // Semi-transparent
+        setMaterial(assemblyMaterial);
+        
+        Material partMaterial = part->getMaterial();
+        partMaterial.transparency = 0.0f; // Opaque
+        part->setMaterial(partMaterial);
+    }
 }
 
 void Assembly::removePart(CADObjectPtr part) {

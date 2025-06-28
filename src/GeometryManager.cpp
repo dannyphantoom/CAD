@@ -12,6 +12,12 @@ Box::Box(const Point3D& min, const Point3D& max)
 void Box::render() const {
     if (!m_visible) return;
     
+    // Apply material color and transparency
+    glColor4f(m_material.diffuseColor.redF(), 
+              m_material.diffuseColor.greenF(), 
+              m_material.diffuseColor.blueF(), 
+              1.0f - m_material.transparency);
+    
     glBegin(GL_QUADS);
     
     // Front face
@@ -95,6 +101,12 @@ Cylinder::Cylinder(float radius, float height, int segments)
 void Cylinder::render() const {
     if (!m_visible) return;
     
+    // Apply material color and transparency
+    glColor4f(m_material.diffuseColor.redF(), 
+              m_material.diffuseColor.greenF(), 
+              m_material.diffuseColor.blueF(), 
+              1.0f - m_material.transparency);
+    
     // Basic cylinder rendering
     const float angleStep = 2.0f * M_PI / m_segments;
     
@@ -146,13 +158,7 @@ void Cylinder::generateMesh() {
     m_meshGenerated = true;
 }
 
-Point3D Cylinder::getBoundingBoxMin() const {
-    return Point3D(-m_radius, -m_height/2, -m_radius);
-}
 
-Point3D Cylinder::getBoundingBoxMax() const {
-    return Point3D(m_radius, m_height/2, m_radius);
-}
 
 void Cylinder::setParameters(float radius, float height, int segments) {
     m_radius = radius;
@@ -163,11 +169,17 @@ void Cylinder::setParameters(float radius, float height, int segments) {
 
 // Sphere implementation
 Sphere::Sphere(float radius, int segments) 
-    : GeometryPrimitive("Sphere"), m_radius(radius), m_segments(segments) {
+    : GeometryPrimitive("Sphere"), m_radius(radius), m_segments(segments), m_center(0, 0, 0) {
 }
 
 void Sphere::render() const {
     if (!m_visible) return;
+    
+    // Apply material color and transparency
+    glColor4f(m_material.diffuseColor.redF(), 
+              m_material.diffuseColor.greenF(), 
+              m_material.diffuseColor.blueF(), 
+              1.0f - m_material.transparency);
     
     // Basic sphere rendering using GL_QUAD_STRIP
     const float PI = 3.14159265359f;
@@ -189,18 +201,18 @@ void Sphere::render() const {
             float x = cos(lng);
             float y = sin(lng);
             
-            glVertex3f(m_radius * x * zr0, m_radius * y * zr0, m_radius * z0);
-            glVertex3f(m_radius * x * zr1, m_radius * y * zr1, m_radius * z1);
+            glVertex3f(m_center.x + m_radius * x * zr0, m_center.y + m_radius * y * zr0, m_center.z + m_radius * z0);
+            glVertex3f(m_center.x + m_radius * x * zr1, m_center.y + m_radius * y * zr1, m_center.z + m_radius * z1);
         }
         glEnd();
     }
 }
 
 bool Sphere::intersects(const Point3D& rayOrigin, const Vector3D& rayDirection) const {
-    // Basic sphere intersection test
-    float dx = rayOrigin.x;
-    float dy = rayOrigin.y;
-    float dz = rayOrigin.z;
+    // Basic sphere intersection test relative to center
+    float dx = rayOrigin.x - m_center.x;
+    float dy = rayOrigin.y - m_center.y;
+    float dz = rayOrigin.z - m_center.z;
     return (dx*dx + dy*dy + dz*dz <= m_radius*m_radius);
 }
 
@@ -225,20 +237,14 @@ void Sphere::generateMesh() {
             float x = cos(lng);
             float y = sin(lng);
             
-            m_vertices.push_back(Point3D(m_radius * x * zr, m_radius * y * zr, m_radius * z));
+            m_vertices.push_back(Point3D(m_center.x + m_radius * x * zr, m_center.y + m_radius * y * zr, m_center.z + m_radius * z));
         }
     }
     
     m_meshGenerated = true;
 }
 
-Point3D Sphere::getBoundingBoxMin() const {
-    return Point3D(-m_radius, -m_radius, -m_radius);
-}
 
-Point3D Sphere::getBoundingBoxMax() const {
-    return Point3D(m_radius, m_radius, m_radius);
-}
 
 void Sphere::setParameters(float radius, int segments) {
     m_radius = radius;
@@ -254,6 +260,12 @@ Cone::Cone(float bottomRadius, float topRadius, float height, int segments)
 
 void Cone::render() const {
     if (!m_visible) return;
+    
+    // Apply material color and transparency
+    glColor4f(m_material.diffuseColor.redF(), 
+              m_material.diffuseColor.greenF(), 
+              m_material.diffuseColor.blueF(), 
+              1.0f - m_material.transparency);
     
     const float angleStep = 2.0f * M_PI / m_segments;
     
@@ -313,15 +325,7 @@ void Cone::generateMesh() {
     m_meshGenerated = true;
 }
 
-Point3D Cone::getBoundingBoxMin() const {
-    float maxRadius = std::max(m_bottomRadius, m_topRadius);
-    return Point3D(-maxRadius, -m_height/2, -maxRadius);
-}
 
-Point3D Cone::getBoundingBoxMax() const {
-    float maxRadius = std::max(m_bottomRadius, m_topRadius);
-    return Point3D(maxRadius, m_height/2, maxRadius);
-}
 
 void Cone::setParameters(float bottomRadius, float topRadius, float height, int segments) {
     m_bottomRadius = bottomRadius;

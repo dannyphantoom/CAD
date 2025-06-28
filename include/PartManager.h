@@ -82,8 +82,8 @@ public:
     void updateAssembly();
     
     // Bounding box
-    Point3D getBoundingBoxMin() const;
-    Point3D getBoundingBoxMax() const;
+    Point3D getBoundingBoxMin() const override;
+    Point3D getBoundingBoxMax() const override;
     
     // Collision detection
     bool hasCollisions() const;

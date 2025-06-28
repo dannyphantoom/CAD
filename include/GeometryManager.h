@@ -60,8 +60,8 @@ public:
     void render() const override;
     bool intersects(const Point3D& rayOrigin, const Vector3D& rayDirection) const override;
     void generateMesh() override;
-    Point3D getBoundingBoxMin() const override;
-    Point3D getBoundingBoxMax() const override;
+    Point3D getBoundingBoxMin() const override { return Point3D(-m_radius, -m_height/2, -m_radius); }
+    Point3D getBoundingBoxMax() const override { return Point3D(m_radius, m_height/2, m_radius); }
     
     void setParameters(float radius, float height, int segments);
     float getRadius() const { return m_radius; }
@@ -82,16 +82,19 @@ public:
     void render() const override;
     bool intersects(const Point3D& rayOrigin, const Vector3D& rayDirection) const override;
     void generateMesh() override;
-    Point3D getBoundingBoxMin() const override;
-    Point3D getBoundingBoxMax() const override;
+    Point3D getBoundingBoxMin() const override { return Point3D(m_center.x - m_radius, m_center.y - m_radius, m_center.z - m_radius); }
+    Point3D getBoundingBoxMax() const override { return Point3D(m_center.x + m_radius, m_center.y + m_radius, m_center.z + m_radius); }
     
     void setParameters(float radius, int segments);
+    void setCenter(const Point3D& center) { m_center = center; }
+    Point3D getCenter() const { return m_center; }
     float getRadius() const { return m_radius; }
     int getSegments() const { return m_segments; }
 
 private:
     float m_radius;
     int m_segments;
+    Point3D m_center;
 };
 
 class Cone : public GeometryPrimitive {
@@ -102,8 +105,8 @@ public:
     void render() const override;
     bool intersects(const Point3D& rayOrigin, const Vector3D& rayDirection) const override;
     void generateMesh() override;
-    Point3D getBoundingBoxMin() const override;
-    Point3D getBoundingBoxMax() const override;
+    Point3D getBoundingBoxMin() const override { float maxRadius = std::max(m_bottomRadius, m_topRadius); return Point3D(-maxRadius, -m_height/2, -maxRadius); }
+    Point3D getBoundingBoxMax() const override { float maxRadius = std::max(m_bottomRadius, m_topRadius); return Point3D(maxRadius, m_height/2, maxRadius); }
     
     void setParameters(float bottomRadius, float topRadius, float height, int segments);
     float getBottomRadius() const { return m_bottomRadius; }
@@ -125,9 +128,11 @@ public:
     
     BooleanObject(CADObjectPtr objectA, CADObjectPtr objectB, Operation op);
     
-    ObjectType getType() const override;
+    ObjectType getType() const override; 
     void render() const override;
     bool intersects(const Point3D& rayOrigin, const Vector3D& rayDirection) const override;
+    Point3D getBoundingBoxMin() const override { return m_result ? m_result->getBoundingBoxMin() : Point3D(); }
+    Point3D getBoundingBoxMax() const override { return m_result ? m_result->getBoundingBoxMax() : Point3D(); }
     
     Operation getOperation() const { return m_operation; }
     CADObjectPtr getObjectA() const { return m_objectA; }

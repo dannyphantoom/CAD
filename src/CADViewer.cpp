@@ -1,5 +1,6 @@
 #include "CADViewer.h"
 #include "GeometryManager.h"
+#include "ToolManager.h"
 #include <QtOpenGL/QOpenGLShader>
 #include <QtCore/QTimer>
 #include <QMouseEvent>
@@ -10,6 +11,7 @@
 #include <QSet>
 #include <QStandardPaths>
 #include <cmath>
+#include <set>
 
 namespace HybridCAD {
 
@@ -19,6 +21,7 @@ CADViewer::CADViewer(QWidget *parent)
     , m_cameraRotationX(0.0f)
     , m_cameraRotationY(0.0f)
     , m_cameraSpeed(DEFAULT_CAMERA_SPEED)
+    , m_mouseSensitivity(DEFAULT_MOUSE_SENSITIVITY)
     , m_wireframeMode(false)
     , m_showGrid(true)
     , m_showAxes(true)
@@ -28,6 +31,7 @@ CADViewer::CADViewer(QWidget *parent)
     , m_snapToGrid(false)
     , m_showMultiPlaneGrid(false)
     , m_visibleGridPlanes{true, false, false}  // Only XY plane visible by default
+    , m_currentSnapMode(SnapMode::NONE)
     , m_activeTool(ActiveTool::SELECT)
     , m_placementState(PlacementState::NONE)
     , m_shapeToPlace(ObjectType::PRIMITIVE_BOX)
@@ -43,6 +47,12 @@ CADViewer::CADViewer(QWidget *parent)
     , m_meshManager(nullptr)
     , m_navigationCube(nullptr)
     , m_settings(nullptr)
+    , m_contextMenu(nullptr)
+    , m_deleteAction(nullptr)
+    , m_reshapeAction(nullptr)
+    , m_padAction(nullptr)
+    , m_moveAction(nullptr)
+    , m_contextMenuObject(nullptr)
 {
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
@@ -58,9 +68,22 @@ CADViewer::CADViewer(QWidget *parent)
     // Initialize settings
     m_settings = new QSettings(QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation) + "/keybindings.ini", QSettings::IniFormat, this);
     
+    // Load preferences
+    QSettings preferences;
+    preferences.beginGroup("Preferences");
+    m_mouseSensitivity = preferences.value("mouseSensitivity", DEFAULT_MOUSE_SENSITIVITY).toFloat();
+    m_cameraSpeed = preferences.value("cameraSpeed", DEFAULT_CAMERA_SPEED).toFloat();
+    preferences.endGroup();
+    
     // Setup default keybindings and load custom ones
     setupDefaultKeyBindings();
     loadKeyBindings();
+    
+    // Setup context menu
+    setupContextMenu();
+    
+    // Initialize geometry manager
+    m_geometryManager = new GeometryManager();
     
     // Animation timer for smooth updates
     m_animationTimer = new QTimer(this);
@@ -76,6 +99,7 @@ CADViewer::CADViewer(QWidget *parent)
 CADViewer::~CADViewer()
 {
     saveKeyBindings();
+    delete m_geometryManager;
     makeCurrent();
     // Cleanup OpenGL resources
     doneCurrent();
@@ -137,9 +161,6 @@ void CADViewer::paintGL()
     // Render objects
     renderObjects();
     
-    // Render selection outline
-    renderSelectionOutline();
-    
     // Render placement preview
     renderPlacementPreview();
     
@@ -153,8 +174,7 @@ void CADViewer::paintGL()
     renderEraserPreview();
     
     // Render size ruler during shape placement
-    if (m_placementState == PlacementState::DRAGGING_TO_SIZE || 
-        m_placementState == PlacementState::SETTING_END_POINT) {
+    if (m_placementState == PlacementState::WAITING_FOR_SECOND_CLICK) {
         renderSizeRuler();
     }
 }
@@ -178,133 +198,95 @@ void CADViewer::mousePressEvent(QMouseEvent *event)
 {
     m_lastMousePos = event->pos();
     m_dragButton = event->button();
-    
+
     if (event->button() == Qt::LeftButton) {
-        // Handle different tool modes
         switch (m_activeTool) {
-        case ActiveTool::SELECT:
-            {
-                // Check for object selection
-                CADObjectPtr pickedObject = pickObject(event->pos());
-                if (pickedObject) {
-                    selectObject(pickedObject);
-                } else {
-                    deselectAll();
+            case ActiveTool::SELECT:
+                {
+                    CADObjectPtr pickedObject = pickObject(event->pos());
+                    if (pickedObject) {
+                        selectObject(pickedObject);
+                    } else {
+                        deselectAll();
+                    }
+                    m_isRotating = true;
                 }
+                break;
+            case ActiveTool::PLACE_SHAPE:
+                handleShapePlacementClick(event->pos());
+                break;
+            case ActiveTool::ERASER:
+                handleEraserPlacementClick(event->pos());
+                break;
+            case ActiveTool::SKETCH_LINE:
+            case ActiveTool::SKETCH_RECTANGLE:
+            case ActiveTool::SKETCH_CIRCLE:
+                handleSketchClick(event->pos());
+                break;
+            case ActiveTool::EXTRUDE_2D:
+                if (m_extrusionObject) {
+                    finishExtrusion();
+                }
+                break;
+            default:
                 m_isRotating = true;
-            }
-            break;
-            
-        case ActiveTool::PLACE_SHAPE:
-            handleShapePlacementClick(event->pos());
-            break;
-            
-        case ActiveTool::SKETCH_LINE:
-        case ActiveTool::SKETCH_RECTANGLE:
-        case ActiveTool::SKETCH_CIRCLE:
-            handleSketchClick(event->pos());
-            break;
-            
-        case ActiveTool::EXTRUDE_2D:
-            handleExtrusionInteraction(event->pos());
-            break;
-            
-        case ActiveTool::ERASER:
-            if (m_eraserMode) {
-                handleEraserClick(event->pos());
-            }
-            break;
-            
-        default:
-            m_isRotating = true;
-            break;
+                break;
         }
     } else if (event->button() == Qt::MiddleButton) {
         m_isPanning = true;
-        m_isDragging = true;
     } else if (event->button() == Qt::RightButton) {
-        // Right click for context or rotation
-        if (m_placementState == PlacementState::DRAGGING_TO_SIZE) {
-            // Cancel current shape placement
-            cancelShapePlacement();
-        } else if (m_placementState != PlacementState::NONE || m_isSketchingActive) {
+        if (m_placementState != PlacementState::NONE || m_isSketchingActive) {
             cancelShapePlacement();
             cancelCurrentSketch();
         } else {
-            // Enable rotation with right-click
-            m_isRotating = true;
-            m_isDragging = true;
+            CADObjectPtr pickedObject = pickObject(event->pos());
+            if (pickedObject) {
+                selectObject(pickedObject);
+                m_contextMenuObject = pickedObject;
+                showObjectContextMenu(event->globalPosition().toPoint());
+            } else {
+                deselectAll();
+                m_isRotating = true;
+            }
         }
     }
-    
-    // For left click, set dragging based on tool
-    if (event->button() == Qt::LeftButton) {
-        m_isDragging = true;
-    }
-    
     update();
 }
 
 void CADViewer::mouseMoveEvent(QMouseEvent *event)
 {
     QPoint delta = event->pos() - m_lastMousePos;
-    
-    if (m_isDragging && (event->buttons() & Qt::MiddleButton)) {
-        // Pan the camera
-        panCamera(delta.x() * 0.01f, delta.y() * 0.01f);
-    } else if (m_isRotating && (event->buttons() & Qt::LeftButton) && m_activeTool == ActiveTool::SELECT) {
-        // Rotate the camera when not in placement mode
-        rotateCamera(delta.x() * 0.01f, delta.y() * 0.01f);
-    } else if (m_isPanning && (event->buttons() & Qt::RightButton)) {
-        // Pan the camera
-        panCamera(delta.x() * 0.01f, delta.y() * 0.01f);
+    float sensitivityFactor = m_mouseSensitivity * 0.5f;
+
+    if ((event->buttons() & Qt::LeftButton && m_activeTool == ActiveTool::SELECT) || (event->buttons() & Qt::RightButton)) {
+        rotateCamera(delta.x() * sensitivityFactor, delta.y() * sensitivityFactor);
+    } else if (event->buttons() & Qt::MiddleButton) {
+        panCamera(delta.x(), delta.y());
+    }
+
+    if (m_placementState == PlacementState::WAITING_FOR_SECOND_CLICK || m_isSketchingActive) {
+        updatePlacementPreview(event->pos());
     }
     
-    // Handle shape placement preview updates during mouse movement
-    if (m_placementState == PlacementState::DRAGGING_TO_SIZE) {
-        updatePlacementPreview(event->pos());
-    } else if (m_placementState == PlacementState::SETTING_END_POINT) {
-        updatePlacementPreview(event->pos());
-    } else if (m_isSketchingActive) {
-        updateSketchPreview(event->pos());
+    if (m_activeTool == ActiveTool::EXTRUDE_2D && m_extrusionObject) {
+        updateExtrusionPreview(event->pos());
     }
     
-    // Emit world coordinates for status bar
     QVector3D worldPos = screenToWorld(event->pos());
     emit coordinatesChanged(worldPos);
-    
+
     m_lastMousePos = event->pos();
     update();
 }
 
 void CADViewer::mouseReleaseEvent(QMouseEvent *event)
 {
-    // Handle end of shape dragging
-    if (m_placementState == PlacementState::DRAGGING_TO_SIZE && m_isDraggingShape && event->button() == Qt::LeftButton) {
-        QVector3D worldPos = screenToWorld(event->pos());
-        if (m_snapToGrid) {
-            worldPos = snapToGrid(worldPos);
-        }
-        
-        m_placementEndPoint = worldPos;
-        
-        // Create the actual object
-        CADObjectPtr newObject = createShapeAtPoints(m_shapeToPlace, m_placementStartPoint, m_placementEndPoint);
-        if (newObject) {
-            addObject(newObject);
-            emit shapePlacementFinished(newObject);
-        }
-        
-        // Reset for next placement
-        m_placementState = PlacementState::SETTING_START_POINT;
-        m_isDraggingShape = false;
-        update();
-        return;
+    if (event->button() == Qt::LeftButton || event->button() == Qt::RightButton) {
+        m_isRotating = false;
     }
-    
-    m_isDragging = false;
-    m_isRotating = false;
-    m_isPanning = false;
+    if (event->button() == Qt::MiddleButton) {
+        m_isPanning = false;
+    }
     update();
 }
 
@@ -422,74 +404,6 @@ void CADViewer::animate()
 
 void CADViewer::setupDefaultKeyBindings()
 {
-    m_keyBindings[KeyAction::TOGGLE_GRID] = QKeySequence(Qt::Key_G);
-    m_keyBindings[KeyAction::TOGGLE_WIREFRAME] = QKeySequence(Qt::Key_Z);
-    m_keyBindings[KeyAction::TOGGLE_AXES] = QKeySequence(Qt::Key_X);
-    m_keyBindings[KeyAction::TOGGLE_GRID_XY] = QKeySequence(Qt::SHIFT | Qt::Key_1);
-    m_keyBindings[KeyAction::TOGGLE_GRID_XZ] = QKeySequence(Qt::SHIFT | Qt::Key_2);
-    m_keyBindings[KeyAction::TOGGLE_GRID_YZ] = QKeySequence(Qt::SHIFT | Qt::Key_3);
-    m_keyBindings[KeyAction::TOGGLE_MULTI_PLANE_GRID] = QKeySequence(Qt::SHIFT | Qt::Key_G);
-    m_keyBindings[KeyAction::RESET_VIEW] = QKeySequence(Qt::Key_Home);
-    m_keyBindings[KeyAction::FRONT_VIEW] = QKeySequence(Qt::Key_1);
-    m_keyBindings[KeyAction::BACK_VIEW] = QKeySequence(Qt::CTRL | Qt::Key_1);
-    m_keyBindings[KeyAction::LEFT_VIEW] = QKeySequence(Qt::Key_3);
-    m_keyBindings[KeyAction::RIGHT_VIEW] = QKeySequence(Qt::CTRL | Qt::Key_3);
-    m_keyBindings[KeyAction::TOP_VIEW] = QKeySequence(Qt::Key_7);
-    m_keyBindings[KeyAction::BOTTOM_VIEW] = QKeySequence(Qt::CTRL | Qt::Key_7);
-    m_keyBindings[KeyAction::ISOMETRIC_VIEW] = QKeySequence(Qt::Key_9);
-    m_keyBindings[KeyAction::DELETE_SELECTED] = QKeySequence(Qt::Key_Delete);
-    m_keyBindings[KeyAction::SELECT_ALL] = QKeySequence(Qt::CTRL | Qt::Key_A);
-    m_keyBindings[KeyAction::DESELECT_ALL] = QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_A);
-    m_keyBindings[KeyAction::PLACE_SHAPE] = QKeySequence(Qt::Key_P);
-    m_keyBindings[KeyAction::SKETCH_LINE] = QKeySequence(Qt::Key_L);
-    m_keyBindings[KeyAction::SKETCH_RECTANGLE] = QKeySequence(Qt::Key_R);
-    m_keyBindings[KeyAction::SKETCH_CIRCLE] = QKeySequence(Qt::Key_C);
-    m_keyBindings[KeyAction::CANCEL_CURRENT_ACTION] = QKeySequence(Qt::Key_Escape);
-}
-
-void CADViewer::loadKeyBindings()
-{
-    m_settings->beginGroup("KeyBindings");
-    for (auto it = m_keyBindings.begin(); it != m_keyBindings.end(); ++it) {
-        QString key = QString::number(static_cast<int>(it.key()));
-        QString defaultValue = it.value().toString();
-        QString value = m_settings->value(key, defaultValue).toString();
-        m_keyBindings[it.key()] = QKeySequence(value);
-    }
-    m_settings->endGroup();
-}
-
-void CADViewer::saveKeyBindings()
-{
-    if (!m_settings) return;
-    
-    m_settings->beginGroup("KeyBindings");
-    for (auto it = m_keyBindings.begin(); it != m_keyBindings.end(); ++it) {
-        QString key = QString::number(static_cast<int>(it.key()));
-        m_settings->setValue(key, it.value().toString());
-    }
-    m_settings->endGroup();
-    m_settings->sync();
-}
-
-void CADViewer::setKeyBinding(KeyAction action, const QKeySequence& keySequence)
-{
-    m_keyBindings[action] = keySequence;
-}
-
-QKeySequence CADViewer::getKeyBinding(KeyAction action) const
-{
-    return m_keyBindings.value(action, QKeySequence());
-}
-
-void CADViewer::resetKeyBindingsToDefault()
-{
-    setupDefaultKeyBindings();
-    saveKeyBindings();
-}
-
-QMap<KeyAction, QKeySequence> CADViewer::getDefaultKeyBindings() const
-{
     QMap<KeyAction, QKeySequence> defaults;
     defaults[KeyAction::TOGGLE_GRID] = QKeySequence(Qt::Key_G);
     defaults[KeyAction::TOGGLE_WIREFRAME] = QKeySequence(Qt::Key_Z);
@@ -514,7 +428,7 @@ QMap<KeyAction, QKeySequence> CADViewer::getDefaultKeyBindings() const
     defaults[KeyAction::SKETCH_RECTANGLE] = QKeySequence(Qt::Key_R);
     defaults[KeyAction::SKETCH_CIRCLE] = QKeySequence(Qt::Key_C);
     defaults[KeyAction::CANCEL_CURRENT_ACTION] = QKeySequence(Qt::Key_Escape);
-    return defaults;
+    m_keyBindings = defaults;
 }
 
 KeyAction CADViewer::getKeyActionFromEvent(QKeyEvent* event) const
@@ -651,7 +565,7 @@ void CADViewer::setupShaders()
         uniform vec3 lightPos;
         uniform vec3 viewPos;
         uniform vec3 lightColor;
-        uniform vec3 objectColor;
+        uniform vec4 objectColor;
         
         void main()
         {
@@ -672,8 +586,8 @@ void CADViewer::setupShaders()
             float spec = pow(max(dot(viewDir, reflectDir), 0.0), 32);
             vec3 specular = specularStrength * spec * lightColor;
             
-            vec3 result = (ambient + diffuse + specular) * objectColor;
-            FragColor = vec4(result, 1.0);
+            vec3 result = (ambient + diffuse + specular) * objectColor.rgb;
+            FragColor = vec4(result, objectColor.a);
         }
     )";
     
@@ -964,24 +878,73 @@ void CADViewer::renderObjects()
     m_shaderProgram->setUniformValue("viewPos", m_cameraPosition);
     m_shaderProgram->setUniformValue("lightColor", QVector3D(1.0f, 1.0f, 1.0f));
     
+    // First pass: determine which objects should be transparent
+    std::set<CADObjectPtr> transparentObjects;
+    
+    // Make objects transparent during active shape placement or eraser mode
+    bool isPlacingShape = (m_placementState != PlacementState::NONE || m_eraserMode);
+    
+    // Check for objects that contain other objects (outer shapes should be transparent)
+    for (const auto& outerObject : m_objects) {
+        if (!outerObject || !outerObject->isVisible()) continue;
+        
+        for (const auto& innerObject : m_objects) {
+            if (!innerObject || !innerObject->isVisible() || outerObject == innerObject) continue;
+            
+            if (objectContainsObject(outerObject, innerObject)) {
+                transparentObjects.insert(outerObject);
+            }
+        }
+    }
+    
+    // Render all objects
     for (const auto& object : m_objects) {
         if (object && object->isVisible()) {
-            // Set object color
             Material mat = object->getMaterial();
-            QVector3D color(mat.diffuseColor.redF(), mat.diffuseColor.greenF(), mat.diffuseColor.blueF());
-            m_shaderProgram->setUniformValue("objectColor", color);
+            QVector4D color(mat.diffuseColor.redF(), mat.diffuseColor.greenF(), mat.diffuseColor.blueF(), 1.0f);
+
+            // Apply transparency rules:
+            // 1. During shape placement/eraser mode, make existing objects transparent
+            // 2. Make outer objects transparent when they contain inner objects
+            if (isPlacingShape || transparentObjects.count(object) > 0) {
+                color.setW(0.5f); // Make transparent
+            } else {
+                color.setW(1.0f - mat.transparency);
+            }
+            // Otherwise, objects remain fully opaque (alpha = 1.0f)
             
-            // Render the object
+            m_shaderProgram->setUniformValue("objectColor", color);
             object->render();
+
+            if (object->isSelected()) {
+                renderSelectionOutline(object);
+            }
         }
     }
     
     m_shaderProgram->release();
 }
 
-void CADViewer::renderSelectionOutline()
+void CADViewer::renderSelectionOutline(CADObjectPtr object)
 {
-    // TODO: Implement selection outline rendering
+    if (!m_lineShaderProgram || !object) return;
+
+    m_lineShaderProgram->bind();
+    m_lineShaderProgram->setUniformValue("model", m_modelMatrix);
+    m_lineShaderProgram->setUniformValue("view", m_viewMatrix);
+    m_lineShaderProgram->setUniformValue("projection", m_projectionMatrix);
+    m_lineShaderProgram->setUniformValue("color", QVector3D(1.0f, 0.0f, 0.0f)); // Red color for selection
+
+    glLineWidth(5.0f); // Thicker line for glow effect
+    glDepthMask(GL_FALSE); // Disable depth writes to ensure outline is always visible
+    glDisable(GL_DEPTH_TEST); // Disable depth test
+
+    object->render(); // Render the object's wireframe
+
+    glEnable(GL_DEPTH_TEST); // Re-enable depth test
+    glDepthMask(GL_TRUE); // Re-enable depth writes
+    glLineWidth(1.0f);
+    m_lineShaderProgram->release();
 }
 
 void CADViewer::updateCameraPosition()
@@ -1003,7 +966,7 @@ void CADViewer::panCamera(float deltaX, float deltaY)
     
     // Scale pan speed based on camera distance for better control
     float scaleFactor = m_cameraDistance * 0.01f;
-    QVector3D translation = (right * deltaX + up * deltaY) * scaleFactor;
+    QVector3D translation = (right * -deltaX + up * deltaY) * scaleFactor;
     
     // Move both camera position and target
     m_cameraTarget += translation;
@@ -1027,44 +990,114 @@ void CADViewer::zoomCamera(float delta)
 
 CADObjectPtr CADViewer::pickObject(const QPoint& screenPos)
 {
-    // TODO: Implement ray casting for object picking
-    Q_UNUSED(screenPos)
-    return nullptr;
+    QVector3D rayOrigin, rayDirection;
+    
+    QMatrix4x4 viewProjectionMatrix = m_projectionMatrix * m_viewMatrix;
+    QMatrix4x4 invViewProjectionMatrix = viewProjectionMatrix.inverted();
+
+    float x = (2.0f * screenPos.x()) / width() - 1.0f;
+    float y = 1.0f - (2.0f * screenPos.y()) / height();
+
+    QVector4D nearPoint(x, y, -1.0f, 1.0f);
+    QVector4D farPoint(x, y, 1.0f, 1.0f);
+
+    QVector4D nearWorld = invViewProjectionMatrix * nearPoint;
+    QVector4D farWorld = invViewProjectionMatrix * farPoint;
+
+    if (nearWorld.w() != 0.0f) nearWorld /= nearWorld.w();
+    if (farWorld.w() != 0.0f) farWorld /= farWorld.w();
+
+    rayOrigin = QVector3D(nearWorld);
+    rayDirection = (QVector3D(farWorld) - rayOrigin).normalized();
+
+    float minDistance = std::numeric_limits<float>::max();
+    CADObjectPtr pickedObject = nullptr;
+
+    for (const auto& object : m_objects) {
+        float distance;
+        if (rayIntersectsObject(rayOrigin, rayDirection, object, distance)) {
+            if (distance < minDistance) {
+                minDistance = distance;
+                pickedObject = object;
+            }
+        }
+    }
+    return pickedObject;
+}
+
+bool CADViewer::rayIntersectsObject(const QVector3D& rayOrigin, const QVector3D& rayDirection, 
+                                  CADObjectPtr object, float& distance)
+{
+    // For now, a simple bounding box intersection test
+    // In a real CAD system, this would involve more complex geometry intersection tests
+    Point3D min = object->getBoundingBoxMin();
+    Point3D max = object->getBoundingBoxMax();
+
+    float tMin = 0.0f;
+    float tMax = std::numeric_limits<float>::max();
+
+    // X-axis
+    if (std::abs(rayDirection.x()) < 1e-6) {
+        if (rayOrigin.x() < min.x || rayOrigin.x() > max.x) return false;
+    } else {
+        float t1 = (min.x - rayOrigin.x()) / rayDirection.x();
+        float t2 = (max.x - rayOrigin.x()) / rayDirection.x();
+        tMin = std::max(tMin, std::min(t1, t2));
+        tMax = std::min(tMax, std::max(t1, t2));
+    }
+
+    // Y-axis
+    if (std::abs(rayDirection.y()) < 1e-6) {
+        if (rayOrigin.y() < min.y || rayOrigin.y() > max.y) return false;
+    } else {
+        float t1 = (min.y - rayOrigin.y()) / rayDirection.y();
+        float t2 = (max.y - rayOrigin.y()) / rayDirection.y();
+        tMin = std::max(tMin, std::min(t1, t2));
+        tMax = std::min(tMax, std::max(t1, t2));
+    }
+
+    // Z-axis
+    if (std::abs(rayDirection.z()) < 1e-6) {
+        if (rayOrigin.z() < min.z || rayOrigin.z() > max.z) return false;
+    } else {
+        float t1 = (min.z - rayOrigin.z()) / rayDirection.z();
+        float t2 = (max.z - rayOrigin.z()) / rayDirection.z();
+        tMin = std::max(tMin, std::min(t1, t2));
+        tMax = std::min(tMax, std::max(t1, t2));
+    }
+
+    if (tMin <= tMax && tMax > 0) {
+        distance = tMin;
+        return true;
+    }
+    return false;
 }
 
 QVector3D CADViewer::screenToWorld(const QPoint& screenPos, float depth)
 {
-    // Get viewport dimensions
-    GLint viewport[4];
-    glGetIntegerv(GL_VIEWPORT, viewport);
-    
-    // Convert screen coordinates to normalized device coordinates
-    float x = (2.0f * screenPos.x()) / viewport[2] - 1.0f;
-    float y = 1.0f - (2.0f * screenPos.y()) / viewport[3];
-    float z = 2.0f * depth - 1.0f;
-    
-    // Create NDC coordinates
-    QVector4D ndc(x, y, z, 1.0f);
-    
-    // Calculate inverse matrices
-    QMatrix4x4 mvp = m_projectionMatrix * m_viewMatrix * m_modelMatrix;
-    QMatrix4x4 invMVP = mvp.inverted();
-    
-    // Transform to world coordinates
-    QVector4D worldPos = invMVP * ndc;
-    
-    if (worldPos.w() != 0.0f) {
-        worldPos /= worldPos.w();
-    }
-    
-    QVector3D result(worldPos.x(), worldPos.y(), worldPos.z());
-    
-    // Only project to grid plane if we're in a placement mode that requires it
-    if (m_placementState != PlacementState::NONE) {
-        return projectToGridPlane(result, m_gridPlane);
-    }
-    
-    return result;
+    QMatrix4x4 viewProjectionMatrix = m_projectionMatrix * m_viewMatrix;
+    QMatrix4x4 invViewProjectionMatrix = viewProjectionMatrix.inverted();
+
+    float x = (2.0f * screenPos.x()) / width() - 1.0f;
+    float y = 1.0f - (2.0f * screenPos.y()) / height();
+
+    QVector4D nearPoint(x, y, -1.0f, 1.0f);
+    QVector4D farPoint(x, y, 1.0f, 1.0f);
+
+    QVector4D nearWorld = invViewProjectionMatrix * nearPoint;
+    QVector4D farWorld = invViewProjectionMatrix * farPoint;
+
+    if (nearWorld.w() != 0.0f) nearWorld /= nearWorld.w();
+    if (farWorld.w() != 0.0f) farWorld /= farWorld.w();
+
+    QVector3D rayOrigin(nearWorld);
+    QVector3D rayDirection = (QVector3D(farWorld) - rayOrigin).normalized();
+
+    QVector3D planeNormal = getGridPlaneNormal(m_gridPlane);
+    float planeD = 0;
+    float t = -(QVector3D::dotProduct(rayOrigin, planeNormal) + planeD) / QVector3D::dotProduct(rayDirection, planeNormal);
+
+    return rayOrigin + t * rayDirection;
 }
 
 QPoint CADViewer::worldToScreen(const QVector3D& worldPos)
@@ -1315,10 +1348,7 @@ void CADViewer::cancelCurrentSketch()
 void CADViewer::handleSketchClick(const QPoint& screenPos)
 {
     QVector3D worldPos = screenToWorld(screenPos);
-    
-    if (m_snapToGrid) {
-        worldPos = snapToGrid(worldPos);
-    }
+    worldPos = applySnapping(worldPos, screenPos);
     
     switch (m_activeTool) {
     case ActiveTool::SKETCH_LINE:
@@ -1360,9 +1390,7 @@ void CADViewer::updateSketchPreview(const QPoint& screenPos)
     if (!m_isSketchingActive || m_sketchPoints.empty()) return;
     
     QVector3D worldPos = screenToWorld(screenPos);
-    if (m_snapToGrid) {
-        worldPos = snapToGrid(worldPos);
-    }
+    worldPos = applySnapping(worldPos, screenPos);
     
     // Update preview point
     if (m_sketchPoints.size() == 1) {
@@ -1377,11 +1405,41 @@ void CADViewer::updateSketchPreview(const QPoint& screenPos)
 
 CADObjectPtr CADViewer::createLineFromPoints(const QVector3D& startPoint, const QVector3D& endPoint)
 {
-    // TODO: Implement actual line object creation
-    // For now, return a basic placeholder
-    Q_UNUSED(startPoint)
-    Q_UNUSED(endPoint)
-    return nullptr;
+    // Create a thin box to represent the line
+    float thickness = 0.01f; // Define a small thickness for the line
+    
+    // Calculate the center and dimensions of the bounding box for the line
+    QVector3D center = (startPoint + endPoint) / 2.0f;
+    QVector3D direction = (endPoint - startPoint).normalized();
+    float length = (endPoint - startPoint).length();
+    
+    // Create a transformation matrix to align the box with the line direction
+    QMatrix4x4 transformMatrix;
+    transformMatrix.translate(center);
+    
+    // Calculate rotation to align with the line direction
+    QVector3D defaultDirection(1.0f, 0.0f, 0.0f); // Assume line is created along X-axis initially
+    QQuaternion rotation = QQuaternion::rotationTo(defaultDirection, direction);
+    transformMatrix.rotate(rotation);
+    
+    // Create a box with length along X, and small thickness in Y and Z
+    Point3D min(-length / 2.0f, -thickness / 2.0f, -thickness / 2.0f);
+    Point3D max(length / 2.0f, thickness / 2.0f, thickness / 2.0f);
+    
+    auto lineBox = std::make_shared<Box>(min, max);
+    
+    // Apply the transformation to the lineBox (this would typically be handled by a scene graph or object transform)
+    // For now, we'll just return the box and assume the viewer handles its placement.
+    // In a more robust system, the Box object would have its own transform.
+    
+    // Set a distinct color for lines
+    Material mat;
+    mat.diffuseColor = QColor(255, 255, 0); // Yellow color for lines
+    mat.specularColor = QColor(255, 255, 255);
+    mat.shininess = 32.0f;
+    lineBox->setMaterial(mat);
+
+    return std::static_pointer_cast<CADObject>(lineBox);
 }
 
 CADObjectPtr CADViewer::createRectangleFromPoints(const QVector3D& startPoint, const QVector3D& endPoint)
@@ -1544,6 +1602,11 @@ void CADViewer::setSnapToGrid(bool enabled)
     m_snapToGrid = enabled;
 }
 
+void CADViewer::setSnapMode(SnapMode mode)
+{
+    m_currentSnapMode = mode;
+}
+
 QVector3D CADViewer::snapToGrid(const QVector3D& position) const
 {
     if (!m_snapToGrid) return position;
@@ -1565,9 +1628,17 @@ void CADViewer::setActiveTool(ActiveTool tool)
         
         m_activeTool = tool;
         
-        // Auto-start shape placement when placing shapes
+        // Auto-start shape placement when placing shapes or using eraser
         if (tool == ActiveTool::PLACE_SHAPE) {
             startShapePlacement();
+            emit statusMessageChanged("Shape Creation Mode");
+        } else if (tool == ActiveTool::ERASER) {
+            setEraserMode(true);
+            startShapePlacement(); // Eraser uses same placement workflow
+            emit statusMessageChanged("Eraser Mode");
+        } else {
+            setEraserMode(false);
+            emit statusMessageChanged("Navigation Mode");
         }
         
         update();
@@ -1596,195 +1667,163 @@ void CADViewer::cancelShapePlacement()
 void CADViewer::handleShapePlacementClick(const QPoint& screenPos)
 {
     QVector3D worldPos = screenToWorld(screenPos);
-    if (m_snapToGrid) {
-        worldPos = snapToGrid(worldPos);
-    }
-    
-    switch (m_placementState) {
-    case PlacementState::NONE:
-    case PlacementState::SETTING_START_POINT:
-        // First click - start dragging
+    worldPos = applySnapping(worldPos, screenPos);
+
+    if (m_placementState == PlacementState::SETTING_START_POINT) {
         m_placementStartPoint = worldPos;
-        m_currentDragPoint = worldPos;
-        m_placementState = PlacementState::DRAGGING_TO_SIZE;
-        m_isDraggingShape = true;
-        break;
-        
-    case PlacementState::DRAGGING_TO_SIZE:
-        // This shouldn't happen during drag, handled in mouse release
-        break;
-        
-    case PlacementState::SETTING_END_POINT:
-        {
-            // Legacy two-click mode (fallback)
-            m_placementEndPoint = worldPos;
-            m_placementState = PlacementState::PLACING;
-            
-            // Create the actual object
-            CADObjectPtr newObject = createShapeAtPoints(m_shapeToPlace, m_placementStartPoint, m_placementEndPoint);
-            if (newObject) {
+        m_placementState = PlacementState::WAITING_FOR_SECOND_CLICK;
+    } else if (m_placementState == PlacementState::WAITING_FOR_SECOND_CLICK) {
+        m_placementEndPoint = worldPos;
+        CADObjectPtr newObject = createShapeAtPoints(m_shapeToPlace, m_placementStartPoint, m_placementEndPoint);
+        if (newObject) {
+            if (m_activeTool == ActiveTool::ERASER) {
+                // Perform boolean subtraction
+            } else {
                 addObject(newObject);
                 emit shapePlacementFinished(newObject);
             }
-            
-            // Reset for next placement
-            m_placementState = PlacementState::SETTING_START_POINT;
-            m_isDraggingShape = false;
         }
-        break;
-        
-    default:
-        break;
+        cancelShapePlacement();
+        setActiveTool(ActiveTool::SELECT);
     }
-    
-    update();
 }
 
 void CADViewer::updatePlacementPreview(const QPoint& screenPos)
 {
-    if (m_placementState == PlacementState::SETTING_END_POINT) {
+    if (m_placementState == PlacementState::WAITING_FOR_SECOND_CLICK) {
         QVector3D worldPos = screenToWorld(screenPos);
-        if (m_snapToGrid) {
-            worldPos = snapToGrid(worldPos);
-        }
+        worldPos = applySnapping(worldPos, screenPos);
         m_placementEndPoint = worldPos;
-    } else if (m_placementState == PlacementState::DRAGGING_TO_SIZE) {
-        QVector3D worldPos = screenToWorld(screenPos);
-        if (m_snapToGrid) {
-            worldPos = snapToGrid(worldPos);
-        }
-        m_currentDragPoint = worldPos;
+        update();
     }
-    
-    update();
 }
 
 CADObjectPtr CADViewer::createShapeAtPoints(ObjectType shapeType, const QVector3D& startPoint, const QVector3D& endPoint)
 {
-    // Calculate center and size from the two points
-    QVector3D center = (startPoint + endPoint) * 0.5f;
-    QVector3D size = QVector3D(std::abs(endPoint.x() - startPoint.x()),
-                              std::abs(endPoint.y() - startPoint.y()),
-                              std::abs(endPoint.z() - startPoint.z()));
-    
-    // Ensure minimum size
-    if (size.length() < 0.1f) {
-        size = QVector3D(1.0f, 1.0f, 1.0f);
-    }
-    
     CADObjectPtr object;
     
     // Create the appropriate geometry primitive
     switch (shapeType) {
     case ObjectType::PRIMITIVE_BOX:
         {
-            Point3D min(center.x() - size.x()/2, center.y() - size.y()/2, center.z() - size.z()/2);
-            Point3D max(center.x() + size.x()/2, center.y() + size.y()/2, center.z() + size.z()/2);
+            Point3D min(std::min(startPoint.x(), endPoint.x()), std::min(startPoint.y(), endPoint.y()), std::min(startPoint.z(), endPoint.z()));
+            Point3D max(std::max(startPoint.x(), endPoint.x()), std::max(startPoint.y(), endPoint.y()), std::max(startPoint.z(), endPoint.z()));
             auto box = std::make_shared<Box>(min, max);
             object = std::static_pointer_cast<CADObject>(box);
         }
         break;
     case ObjectType::PRIMITIVE_CYLINDER:
         {
-            float radius = std::max(size.x(), size.y()) / 2.0f;
-            float height = size.z();
+            QVector3D diff = endPoint - startPoint;
+            float radius = std::sqrt(diff.x() * diff.x() + diff.y() * diff.y());
+            float height = std::abs(diff.z());
+            if (height < 0.01f) height = 1.0f;
             auto cylinder = std::make_shared<Cylinder>(radius, height);
             object = std::static_pointer_cast<CADObject>(cylinder);
         }
         break;
     case ObjectType::PRIMITIVE_SPHERE:
         {
-            float radius = std::max({size.x(), size.y(), size.z()}) / 2.0f;
+            float radius = (endPoint - startPoint).length();
             auto sphere = std::make_shared<Sphere>(radius);
+            sphere->setCenter(Point3D(startPoint.x(), startPoint.y(), startPoint.z()));
             object = std::static_pointer_cast<CADObject>(sphere);
         }
         break;
     case ObjectType::PRIMITIVE_CONE:
         {
-            float radius = std::max(size.x(), size.y()) / 2.0f;
-            float height = size.z();
+            QVector3D diff = endPoint - startPoint;
+            float radius = std::sqrt(diff.x() * diff.x() + diff.y() * diff.y());
+            float height = std::abs(diff.z());
+            if (height < 0.01f) height = 1.0f;
             auto cone = std::make_shared<Cone>(radius, 0.0f, height);
             object = std::static_pointer_cast<CADObject>(cone);
         }
         break;
     case ObjectType::PRIMITIVE_RECTANGLE:
         {
-            // Create a thin 2D rectangle on the current grid plane
-            float thickness = 0.01f; // Very thin for 2D appearance
+            float thickness = 0.01f;
             Point3D min, max;
-            
             switch (m_gridPlane) {
             case GridPlane::XY_PLANE:
-                min = Point3D(center.x() - size.x()/2, center.y() - size.y()/2, center.z() - thickness/2);
-                max = Point3D(center.x() + size.x()/2, center.y() + size.y()/2, center.z() + thickness/2);
+                min = Point3D(std::min(startPoint.x(), endPoint.x()), std::min(startPoint.y(), endPoint.y()), startPoint.z() - thickness/2);
+                max = Point3D(std::max(startPoint.x(), endPoint.x()), std::max(startPoint.y(), endPoint.y()), startPoint.z() + thickness/2);
                 break;
             case GridPlane::XZ_PLANE:
-                min = Point3D(center.x() - size.x()/2, center.y() - thickness/2, center.z() - size.z()/2);
-                max = Point3D(center.x() + size.x()/2, center.y() + thickness/2, center.z() + size.z()/2);
+                min = Point3D(std::min(startPoint.x(), endPoint.x()), startPoint.y() - thickness/2, std::min(startPoint.z(), endPoint.z()));
+                max = Point3D(std::max(startPoint.x(), endPoint.x()), startPoint.y() + thickness/2, std::max(startPoint.z(), endPoint.z()));
                 break;
             case GridPlane::YZ_PLANE:
-                min = Point3D(center.x() - thickness/2, center.y() - size.y()/2, center.z() - size.z()/2);
-                max = Point3D(center.x() + thickness/2, center.y() + size.y()/2, center.z() + size.z()/2);
+                min = Point3D(startPoint.x() - thickness/2, std::min(startPoint.y(), endPoint.y()), std::min(startPoint.z(), endPoint.z()));
+                max = Point3D(startPoint.x() + thickness/2, std::max(startPoint.y(), endPoint.y()), std::max(startPoint.z(), endPoint.z()));
                 break;
             }
-            
             auto rectangle = std::make_shared<Box>(min, max);
             object = std::static_pointer_cast<CADObject>(rectangle);
         }
         break;
     case ObjectType::PRIMITIVE_CIRCLE:
         {
-            // Create a thin 2D circle on the current grid plane
-            float radius = std::max(size.x(), size.y()) / 2.0f;
-            float height = 0.01f; // Very thin for 2D appearance
+            QVector3D diff = endPoint - startPoint;
+            float radius;
+            switch (m_gridPlane) {
+            case GridPlane::XY_PLANE:
+                radius = std::sqrt(diff.x() * diff.x() + diff.y() * diff.y());
+                break;
+            case GridPlane::XZ_PLANE:
+                radius = std::sqrt(diff.x() * diff.x() + diff.z() * diff.z());
+                break;
+            case GridPlane::YZ_PLANE:
+                radius = std::sqrt(diff.y() * diff.y() + diff.z() * diff.z());
+                break;
+            }
+            float height = 0.01f;
             auto circle = std::make_shared<Cylinder>(radius, height);
+            // In a real implementation, we would create a proper 2D circle object
+            // and orient it based on the grid plane. For now, we create a thin cylinder.
             object = std::static_pointer_cast<CADObject>(circle);
         }
         break;
     case ObjectType::PRIMITIVE_LINE:
         {
-            // Create a line representation using a thin cylinder
-            float length = (endPoint - startPoint).length();
-            float radius = 0.005f; // Very thin line
-            auto line = std::make_shared<Cylinder>(radius, length);
-            object = std::static_pointer_cast<CADObject>(line);
+            object = createLineFromPoints(startPoint, endPoint);
         }
         break;
     default:
         return nullptr;
     }
-    
+
     if (object) {
-        // Set a default material color based on shape type
         Material mat;
         switch (shapeType) {
         case ObjectType::PRIMITIVE_BOX:
-            mat.diffuseColor = QColor(100, 150, 255); // Blue
+            mat.diffuseColor = QColor(100, 150, 255);
             break;
         case ObjectType::PRIMITIVE_CYLINDER:
-            mat.diffuseColor = QColor(255, 100, 100); // Red
+            mat.diffuseColor = QColor(255, 100, 100);
             break;
         case ObjectType::PRIMITIVE_SPHERE:
-            mat.diffuseColor = QColor(100, 255, 100); // Green
+            mat.diffuseColor = QColor(100, 255, 100);
             break;
         case ObjectType::PRIMITIVE_CONE:
-            mat.diffuseColor = QColor(255, 255, 100); // Yellow
+            mat.diffuseColor = QColor(255, 255, 100);
             break;
         case ObjectType::PRIMITIVE_RECTANGLE:
-            mat.diffuseColor = QColor(255, 150, 100); // Orange
+            mat.diffuseColor = QColor(255, 150, 100);
             break;
         case ObjectType::PRIMITIVE_CIRCLE:
-            mat.diffuseColor = QColor(150, 100, 255); // Purple
+            mat.diffuseColor = QColor(200, 100, 255);
             break;
         case ObjectType::PRIMITIVE_LINE:
-            mat.diffuseColor = QColor(255, 255, 255); // White
+            mat.diffuseColor = QColor(255, 255, 255);
             break;
         default:
-            mat.diffuseColor = QColor(128, 128, 128); // Gray
+            mat.diffuseColor = QColor(128, 128, 128);
             break;
         }
+        mat.specularColor = QColor(255, 255, 255);
+        mat.shininess = 32.0f;
         object->setMaterial(mat);
-        object->setVisible(true);
     }
     
     return object;
@@ -1809,9 +1848,42 @@ void CADViewer::setExtrusionDistance(float distance)
 
 void CADViewer::finishExtrusion()
 {
-    if (m_extrusionObject) {
-        // Perform the actual extrusion operation
-        emit extrusionFinished(m_extrusionObject);
+    if (m_extrusionObject && m_extrusionDistance > 0.01f) {
+        // Create a 3D extruded version of the 2D shape
+        CADObjectPtr extrudedObject = nullptr;
+        
+        ObjectType type = m_extrusionObject->getType();
+        if (type == ObjectType::PRIMITIVE_RECTANGLE) {
+            // Convert 2D rectangle to 3D box
+            Point3D min = m_extrusionObject->getBoundingBoxMin();
+            Point3D max = m_extrusionObject->getBoundingBoxMax();
+            
+            // Extrude in the Z direction
+            max.z = min.z + m_extrusionDistance;
+            
+            auto box = std::make_shared<Box>(min, max);
+            extrudedObject = std::static_pointer_cast<CADObject>(box);
+        } 
+        else if (type == ObjectType::PRIMITIVE_CIRCLE) {
+            // Convert 2D circle to 3D cylinder
+            // For circles, we need to extract radius from bounding box
+            Point3D min = m_extrusionObject->getBoundingBoxMin();
+            Point3D max = m_extrusionObject->getBoundingBoxMax();
+            float radius = (max.x - min.x) / 2.0f;
+            
+            auto cylinder = std::make_shared<Cylinder>(radius, m_extrusionDistance);
+            extrudedObject = std::static_pointer_cast<CADObject>(cylinder);
+        }
+        
+        if (extrudedObject) {
+            // Remove the original 2D object and add the 3D extruded version
+            removeObject(m_extrusionObject);
+            addObject(extrudedObject);
+            selectObject(extrudedObject);
+            
+            emit extrusionFinished(extrudedObject);
+            emit statusMessageChanged("Shape successfully extruded to 3D");
+        }
         
         m_extrusionObject.reset();
         m_activeTool = ActiveTool::SELECT;
@@ -1828,9 +1900,23 @@ void CADViewer::handleExtrusionInteraction(const QPoint& screenPos)
 
 void CADViewer::updateExtrusionPreview(const QPoint& screenPos)
 {
-    Q_UNUSED(screenPos)
-    // Update extrusion preview based on mouse movement
-    update();
+    if (m_extrusionObject && m_activeTool == ActiveTool::EXTRUDE_2D) {
+        // Calculate extrusion distance based on mouse position
+        QVector3D worldPos = screenToWorld(screenPos);
+        
+        // Get the object center for reference
+        Point3D min = m_extrusionObject->getBoundingBoxMin();
+        Point3D max = m_extrusionObject->getBoundingBoxMax();
+        QVector3D center((min.x + max.x) / 2, (min.y + max.y) / 2, (min.z + max.z) / 2);
+        
+        // Calculate distance from center to mouse position
+        float distance = (worldPos - center).length();
+        
+        // Limit the distance to reasonable bounds
+        m_extrusionDistance = std::max(0.1f, std::min(10.0f, distance));
+        
+        update();
+    }
 }
 
 // Eraser functionality
@@ -1845,6 +1931,10 @@ void CADViewer::setEraserMode(bool enabled)
 void CADViewer::setEraserShape(ObjectType shapeType)
 {
     m_eraserShape = shapeType;
+    // When in eraser mode, also set this as the shape to place for preview
+    if (m_eraserMode) {
+        m_shapeToPlace = shapeType;
+    }
 }
 
 void CADViewer::handleEraserClick(const QPoint& screenPos)
@@ -1861,20 +1951,145 @@ void CADViewer::handleEraserClick(const QPoint& screenPos)
     }
 }
 
-void CADViewer::performBooleanSubtraction(CADObjectPtr target, CADObjectPtr eraser)
+// New eraser placement method that works like shape creation
+void CADViewer::handleEraserPlacementClick(const QPoint& screenPos)
 {
-    Q_UNUSED(target)
-    Q_UNUSED(eraser)
-    // Implement boolean subtraction operation
-    // This would require a boolean operations library like OpenCASCADE or CGAL
+    QVector3D worldPos = screenToWorld(screenPos);
+    worldPos = applySnapping(worldPos, screenPos);
+
+    if (m_placementState == PlacementState::SETTING_START_POINT) {
+        m_placementStartPoint = worldPos;
+        m_placementState = PlacementState::WAITING_FOR_SECOND_CLICK;
+    } else if (m_placementState == PlacementState::WAITING_FOR_SECOND_CLICK) {
+        m_placementEndPoint = worldPos;
+        
+        // Create eraser shape
+        CADObjectPtr eraserObject = createShapeAtPoints(m_eraserShape, m_placementStartPoint, m_placementEndPoint);
+        if (eraserObject) {
+            // Find all objects that intersect with the eraser shape and perform boolean subtraction
+            std::vector<CADObjectPtr> intersectedObjects;
+            for (const auto& object : m_objects) {
+                if (object && object.get() != eraserObject.get() && objectsIntersect(object, eraserObject)) {
+                    intersectedObjects.push_back(object);
+                }
+            }
+            
+            // Perform boolean subtraction on all intersected objects
+            for (const auto& targetObject : intersectedObjects) {
+                performBooleanSubtraction(targetObject, eraserObject);
+            }
+        }
+        
+        cancelShapePlacement();
+        setActiveTool(ActiveTool::SELECT);
+    }
 }
 
-// Grid rendering methods
-void CADViewer::renderGridPlane(GridPlane plane)
+void CADViewer::performBooleanSubtraction(CADObjectPtr target, CADObjectPtr eraser)
 {
-    // Enhanced grid rendering for different planes
-    Q_UNUSED(plane)
-    // Implementation would render grid on the specified plane
+    if (!target || !eraser) return;
+    
+    // Create a boolean difference object
+    if (m_geometryManager) {
+        auto booleanResult = m_geometryManager->performDifference(target, eraser);
+        if (booleanResult) {
+            // Replace the original object with the boolean result
+            removeObject(target);
+            addObject(std::static_pointer_cast<CADObject>(booleanResult));
+        }
+    }
+}
+
+bool CADViewer::objectsIntersect(CADObjectPtr obj1, CADObjectPtr obj2)
+{
+    if (!obj1 || !obj2) return false;
+    
+    // Simple bounding box intersection test
+    Point3D min1 = obj1->getBoundingBoxMin();
+    Point3D max1 = obj1->getBoundingBoxMax();
+    Point3D min2 = obj2->getBoundingBoxMin();
+    Point3D max2 = obj2->getBoundingBoxMax();
+    
+    return (min1.x <= max2.x && max1.x >= min2.x) &&
+           (min1.y <= max2.y && max1.y >= min2.y) &&
+           (min1.z <= max2.z && max1.z >= min2.z);
+}
+
+bool CADViewer::objectContainsObject(CADObjectPtr outer, CADObjectPtr inner)
+{
+    if (!outer || !inner) return false;
+    
+    Point3D min_outer = outer->getBoundingBoxMin();
+    Point3D max_outer = outer->getBoundingBoxMax();
+    Point3D min_inner = inner->getBoundingBoxMin();
+    Point3D max_inner = inner->getBoundingBoxMax();
+    
+    return (min_inner.x >= min_outer.x && max_inner.x <= max_outer.x &&
+            min_inner.y >= min_outer.y && max_inner.y <= max_outer.y &&
+            min_inner.z >= min_outer.z && max_inner.z <= max_outer.z);
+}
+
+void CADViewer::renderPlacementPreview()
+{
+    if (m_placementState != PlacementState::WAITING_FOR_SECOND_CLICK) return;
+    
+    CADObjectPtr previewObject = createShapeAtPoints(m_shapeToPlace, m_placementStartPoint, m_placementEndPoint);
+    if (previewObject) {
+        if (m_activeTool == ActiveTool::ERASER) {
+            Material mat;
+            mat.diffuseColor = QColor(255, 0, 0, 100); // Red transparent for eraser
+            previewObject->setMaterial(mat);
+        }
+        previewObject->render();
+    }
+}
+
+void CADViewer::renderExtrusionPreview()
+{
+    if (!m_extrusionObject || m_activeTool != ActiveTool::EXTRUDE_2D) return;
+    
+    // Create a temporary extruded object for preview
+    ObjectType type = m_extrusionObject->getType();
+    CADObjectPtr previewObject = nullptr;
+    
+    if (type == ObjectType::PRIMITIVE_RECTANGLE) {
+        Point3D min = m_extrusionObject->getBoundingBoxMin();
+        Point3D max = m_extrusionObject->getBoundingBoxMax();
+        max.z = min.z + m_extrusionDistance;
+        auto box = std::make_shared<Box>(min, max);
+        previewObject = std::static_pointer_cast<CADObject>(box);
+    } else if (type == ObjectType::PRIMITIVE_CIRCLE) {
+        Point3D min = m_extrusionObject->getBoundingBoxMin();
+        Point3D max = m_extrusionObject->getBoundingBoxMax();
+        float radius = (max.x - min.x) / 2.0f;
+        auto cylinder = std::make_shared<Cylinder>(radius, m_extrusionDistance);
+        previewObject = std::static_pointer_cast<CADObject>(cylinder);
+    }
+    
+    if (previewObject) {
+        Material mat;
+        mat.diffuseColor = QColor(0, 255, 0, 100); // Green transparent for preview
+        previewObject->setMaterial(mat);
+        previewObject->render();
+    }
+}
+
+void CADViewer::renderEraserPreview()
+{
+    if (m_activeTool != ActiveTool::ERASER || m_placementState != PlacementState::WAITING_FOR_SECOND_CLICK) return;
+    
+    CADObjectPtr previewObject = createShapeAtPoints(m_eraserShape, m_placementStartPoint, m_placementEndPoint);
+    if (previewObject) {
+        Material mat;
+        mat.diffuseColor = QColor(255, 0, 0, 100); // Red transparent for eraser
+        previewObject->setMaterial(mat);
+        previewObject->render();
+    }
+}
+
+void CADViewer::renderSizeRuler()
+{
+    // Render a line and text indicating the size of the shape being placed
 }
 
 QVector3D CADViewer::getGridPlaneNormal(GridPlane plane) const
@@ -1883,437 +2098,240 @@ QVector3D CADViewer::getGridPlaneNormal(GridPlane plane) const
     case GridPlane::XY_PLANE: return QVector3D(0, 0, 1);
     case GridPlane::XZ_PLANE: return QVector3D(0, 1, 0);
     case GridPlane::YZ_PLANE: return QVector3D(1, 0, 0);
-    default: return QVector3D(0, 0, 1);
     }
+    return QVector3D(0, 0, 1);
 }
 
 QVector3D CADViewer::projectToGridPlane(const QVector3D& point, GridPlane plane) const
 {
-    QVector3D projected = point;
-    
-    switch (plane) {
-    case GridPlane::XY_PLANE:
-        projected.setZ(0);
-        break;
-    case GridPlane::XZ_PLANE:
-        projected.setY(0);
-        break;
-    case GridPlane::YZ_PLANE:
-        projected.setX(0);
-        break;
-    }
-    
-    return projected;
+    QVector3D normal = getGridPlaneNormal(plane);
+    return point - QVector3D::dotProduct(point, normal) * normal;
 }
 
-// Enhanced rendering methods
-void CADViewer::renderPlacementPreview()
+void CADViewer::renderBox(const Point3D& min, const Point3D& max)
 {
-    if (m_placementState == PlacementState::SETTING_END_POINT || 
-        m_placementState == PlacementState::DRAGGING_TO_SIZE) {
-        
-        if (!m_gridShaderProgram) return;
-        
-        QVector3D start = m_placementStartPoint;
-        QVector3D end;
-        
-        if (m_placementState == PlacementState::DRAGGING_TO_SIZE) {
-            end = m_currentDragPoint;
-        } else {
-            end = m_placementEndPoint;
-        }
-        
-        // Calculate preview shape bounds
-        QVector3D center = (start + end) * 0.5f;
-        QVector3D size = QVector3D(std::abs(end.x() - start.x()),
-                                  std::abs(end.y() - start.y()),
-                                  std::abs(end.z() - start.z()));
-        
-        // Ensure minimum visible size
-        if (size.length() < 0.1f) {
-            size = QVector3D(0.5f, 0.5f, 0.5f);
-        }
-        
-        m_gridShaderProgram->bind();
-        m_gridShaderProgram->setUniformValue("model", m_modelMatrix);
-        m_gridShaderProgram->setUniformValue("view", m_viewMatrix);
-        m_gridShaderProgram->setUniformValue("projection", m_projectionMatrix);
-        m_gridShaderProgram->setUniformValue("color", QVector3D(0.8f, 0.8f, 0.2f)); // Yellow preview
-        
-        glLineWidth(2.0f);
-        
-        // Draw wireframe preview based on shape type
-        switch (m_shapeToPlace) {
-        case ObjectType::PRIMITIVE_BOX:
-            {
-                QVector3D min = center - size * 0.5f;
-                QVector3D max = center + size * 0.5f;
-                
-                // Draw box wireframe
-                glBegin(GL_LINES);
-                // Bottom face
-                glVertex3f(min.x(), min.y(), min.z());
-                glVertex3f(max.x(), min.y(), min.z());
-                glVertex3f(max.x(), min.y(), min.z());
-                glVertex3f(max.x(), max.y(), min.z());
-                glVertex3f(max.x(), max.y(), min.z());
-                glVertex3f(min.x(), max.y(), min.z());
-                glVertex3f(min.x(), max.y(), min.z());
-                glVertex3f(min.x(), min.y(), min.z());
-                
-                // Top face
-                glVertex3f(min.x(), min.y(), max.z());
-                glVertex3f(max.x(), min.y(), max.z());
-                glVertex3f(max.x(), min.y(), max.z());
-                glVertex3f(max.x(), max.y(), max.z());
-                glVertex3f(max.x(), max.y(), max.z());
-                glVertex3f(min.x(), max.y(), max.z());
-                glVertex3f(min.x(), max.y(), max.z());
-                glVertex3f(min.x(), min.y(), max.z());
-                
-                // Vertical edges
-                glVertex3f(min.x(), min.y(), min.z());
-                glVertex3f(min.x(), min.y(), max.z());
-                glVertex3f(max.x(), min.y(), min.z());
-                glVertex3f(max.x(), min.y(), max.z());
-                glVertex3f(max.x(), max.y(), min.z());
-                glVertex3f(max.x(), max.y(), max.z());
-                glVertex3f(min.x(), max.y(), min.z());
-                glVertex3f(min.x(), max.y(), max.z());
-                glEnd();
-            }
-            break;
-            
-        case ObjectType::PRIMITIVE_RECTANGLE:
-            {
-                // Draw 2D rectangle wireframe on current grid plane
-                QVector3D min = center - size * 0.5f;
-                QVector3D max = center + size * 0.5f;
-                
-                glBegin(GL_LINE_LOOP);
-                switch (m_gridPlane) {
-                case GridPlane::XY_PLANE:
-                    glVertex3f(min.x(), min.y(), center.z());
-                    glVertex3f(max.x(), min.y(), center.z());
-                    glVertex3f(max.x(), max.y(), center.z());
-                    glVertex3f(min.x(), max.y(), center.z());
-                    break;
-                case GridPlane::XZ_PLANE:
-                    glVertex3f(min.x(), center.y(), min.z());
-                    glVertex3f(max.x(), center.y(), min.z());
-                    glVertex3f(max.x(), center.y(), max.z());
-                    glVertex3f(min.x(), center.y(), max.z());
-                    break;
-                case GridPlane::YZ_PLANE:
-                    glVertex3f(center.x(), min.y(), min.z());
-                    glVertex3f(center.x(), max.y(), min.z());
-                    glVertex3f(center.x(), max.y(), max.z());
-                    glVertex3f(center.x(), min.y(), max.z());
-                    break;
-                }
-                glEnd();
-            }
-            break;
-            
-        case ObjectType::PRIMITIVE_CIRCLE:
-            {
-                // Draw 2D circle wireframe on current grid plane
-                float radius = std::max(size.x(), size.y()) * 0.5f;
-                int segments = 32;
-                
-                glBegin(GL_LINE_LOOP);
-                for (int i = 0; i < segments; ++i) {
-                    float angle = 2.0f * M_PI * i / segments;
-                    float cosAngle = cos(angle);
-                    float sinAngle = sin(angle);
-                    
-                    switch (m_gridPlane) {
-                    case GridPlane::XY_PLANE:
-                        glVertex3f(center.x() + radius * cosAngle, center.y() + radius * sinAngle, center.z());
-                        break;
-                    case GridPlane::XZ_PLANE:
-                        glVertex3f(center.x() + radius * cosAngle, center.y(), center.z() + radius * sinAngle);
-                        break;
-                    case GridPlane::YZ_PLANE:
-                        glVertex3f(center.x(), center.y() + radius * cosAngle, center.z() + radius * sinAngle);
-                        break;
+    // This function is now part of the Box class render method
+}
+
+void CADViewer::renderCylinder(float radius, float height, int segments)
+{
+    // This function is now part of the Cylinder class render method
+}
+
+void CADViewer::renderSphere(float radius, int segments)
+{
+    // This function is now part of the Sphere class render method
+}
+
+void CADViewer::renderCone(float bottomRadius, float topRadius, float height, int segments)
+{
+    // This function is now part of the Cone class render method
+}
+
+void CADViewer::showObjectContextMenu(const QPoint& pos)
+{
+    if (m_contextMenu) {
+        m_contextMenu->exec(pos);
+    }
+}
+
+void CADViewer::deleteSelectedObject()
+{
+    if (m_contextMenuObject) {
+        removeObject(m_contextMenuObject);
+        m_contextMenuObject = nullptr;
+    }
+}
+
+void CADViewer::reshapeSelectedObject()
+{
+    if (m_contextMenuObject) {
+        // For now, we will just log a message.
+        // A real implementation would involve entering a reshape mode.
+        qDebug() << "Reshape action triggered for object:" << QString::fromStdString(m_contextMenuObject->getName());
+        emit statusMessageChanged("Reshape action is not yet implemented.");
+    }
+}
+
+void CADViewer::padSelectedObject()
+{
+    if (m_contextMenuObject) {
+        startExtrusionMode(m_contextMenuObject);
+        emit statusMessageChanged("Extrusion mode enabled. Move mouse to set distance.");
+    }
+}
+
+void CADViewer::moveSelectedObject()
+{
+    if (m_contextMenuObject) {
+        // For now, we will just log a message.
+        // A real implementation would involve a move tool or gizmo.
+        qDebug() << "Move action triggered for object:" << QString::fromStdString(m_contextMenuObject->getName());
+        emit statusMessageChanged("Move action is not yet implemented.");
+    }
+}
+
+void CADViewer::setupContextMenu()
+{
+    m_contextMenu = new QMenu(this);
+    
+    m_deleteAction = new QAction("Delete", this);
+    m_reshapeAction = new QAction("Reshape", this);
+    m_padAction = new QAction("Pad", this);
+    m_moveAction = new QAction("Move", this);
+    
+    m_contextMenu->addAction(m_deleteAction);
+    m_contextMenu->addAction(m_reshapeAction);
+    m_contextMenu->addAction(m_padAction);
+    m_contextMenu->addAction(m_moveAction);
+    
+    connect(m_deleteAction, &QAction::triggered, this, &CADViewer::deleteSelectedObject);
+    connect(m_reshapeAction, &QAction::triggered, this, &CADViewer::reshapeSelectedObject);
+    connect(m_padAction, &QAction::triggered, this, &CADViewer::padSelectedObject);
+    connect(m_moveAction, &QAction::triggered, this, &CADViewer::moveSelectedObject);
+}
+
+QVector3D CADViewer::applySnapping(const QVector3D& position, const QPoint& screenPos) const
+{
+    switch (m_currentSnapMode) {
+    case SnapMode::GRID:
+        return snapToGrid(position);
+    case SnapMode::VERTEX:
+        return snapToVertex(position);
+    case SnapMode::EDGE:
+        return snapToEdge(position, screenPos);
+    case SnapMode::FACE:
+        return snapToFace(position, screenPos);
+    case SnapMode::CENTER:
+        return snapToCenter(position);
+    case SnapMode::MIDPOINT:
+        return snapToMidpoint(position);
+    case SnapMode::NONE:
+    default:
+        return position;
+    }
+}
+
+QVector3D CADViewer::snapToVertex(const QVector3D& position) const
+{
+    QVector3D closestVertex = position;
+    float minDistance = 0.5f; // Snap within a certain radius
+
+    for (const auto& object : m_objects) {
+        if (auto primitive = std::dynamic_pointer_cast<GeometryPrimitive>(object)) {
+            if (!primitive->getVertices().empty()) {
+                for (const auto& vertex : primitive->getVertices()) {
+                    QVector3D qvertex = vertex.toQVector3D();
+                    float distance = position.distanceToPoint(qvertex);
+                    if (distance < minDistance) {
+                        minDistance = distance;
+                        closestVertex = qvertex;
                     }
                 }
-                glEnd();
             }
-            break;
-            
-        case ObjectType::PRIMITIVE_LINE:
-            {
-                // Draw line from start to end
-                glBegin(GL_LINES);
-                glVertex3f(start.x(), start.y(), start.z());
-                glVertex3f(end.x(), end.y(), end.z());
-                glEnd();
-            }
-            break;
-            
-        case ObjectType::PRIMITIVE_CYLINDER:
-        case ObjectType::PRIMITIVE_SPHERE:
-        case ObjectType::PRIMITIVE_CONE:
-            {
-                // Draw simplified wireframe (circle for base)
-                float radius = std::max(size.x(), size.y()) * 0.5f;
-                int segments = 16;
-                
-                glBegin(GL_LINE_LOOP);
-                for (int i = 0; i < segments; ++i) {
-                    float angle = 2.0f * M_PI * i / segments;
-                    float x = center.x() + radius * cos(angle);
-                    float y = center.y() + radius * sin(angle);
-                    glVertex3f(x, y, center.z());
-                }
-                glEnd();
-                
-                // For cylinder/cone, draw top circle too
-                if (m_shapeToPlace == ObjectType::PRIMITIVE_CYLINDER) {
-                    glBegin(GL_LINE_LOOP);
-                    for (int i = 0; i < segments; ++i) {
-                        float angle = 2.0f * M_PI * i / segments;
-                        float x = center.x() + radius * cos(angle);
-                        float y = center.y() + radius * sin(angle);
-                        glVertex3f(x, y, center.z() + size.z() * 0.5f);
-                    }
-                    glEnd();
-                    
-                    // Connect circles with vertical lines
-                    glBegin(GL_LINES);
-                    for (int i = 0; i < segments; i += 4) {
-                        float angle = 2.0f * M_PI * i / segments;
-                        float x = center.x() + radius * cos(angle);
-                        float y = center.y() + radius * sin(angle);
-                        glVertex3f(x, y, center.z() - size.z() * 0.5f);
-                        glVertex3f(x, y, center.z() + size.z() * 0.5f);
-                    }
-                    glEnd();
-                }
-            }
-            break;
-            
-        default:
-            break;
-        }
-        
-        glLineWidth(1.0f);
-        m_gridShaderProgram->release();
-    }
-}
-
-void CADViewer::renderExtrusionPreview()
-{
-    if (m_extrusionObject && m_activeTool == ActiveTool::EXTRUDE_2D) {
-        // Render preview of the extrusion
-    }
-}
-
-void CADViewer::renderEraserPreview()
-{
-    if (m_eraserMode) {
-        // Render preview of the eraser shape
-    }
-}
-
-void CADViewer::renderSizeRuler()
-{
-    if (!m_gridShaderProgram) return;
-    
-    QVector3D start = m_placementStartPoint;
-    QVector3D end;
-    
-    if (m_placementState == PlacementState::DRAGGING_TO_SIZE) {
-        end = m_currentDragPoint;
-    } else {
-        end = m_placementEndPoint;
-    }
-    
-    // Calculate dimensions
-    QVector3D size = end - start;
-    float width = std::abs(size.x());
-    float height = std::abs(size.y());
-    float depth = std::abs(size.z());
-    
-    m_gridShaderProgram->bind();
-    m_gridShaderProgram->setUniformValue("model", m_modelMatrix);
-    m_gridShaderProgram->setUniformValue("view", m_viewMatrix);
-    m_gridShaderProgram->setUniformValue("projection", m_projectionMatrix);
-    m_gridShaderProgram->setUniformValue("color", QVector3D(1.0f, 1.0f, 0.0f)); // Yellow
-    
-    glLineWidth(2.0f);
-    glBegin(GL_LINES);
-    
-    // Draw dimension lines
-    QVector3D center = (start + end) * 0.5f;
-    
-    // Width line (X direction)
-    if (width > 0.01f) {
-        float y_offset = (start.y() < end.y()) ? std::min(start.y(), end.y()) - 0.5f : std::max(start.y(), end.y()) + 0.5f;
-        glVertex3f(start.x(), y_offset, center.z());
-        glVertex3f(end.x(), y_offset, center.z());
-        
-        // Tick marks
-        glVertex3f(start.x(), y_offset - 0.2f, center.z());
-        glVertex3f(start.x(), y_offset + 0.2f, center.z());
-        glVertex3f(end.x(), y_offset - 0.2f, center.z());
-        glVertex3f(end.x(), y_offset + 0.2f, center.z());
-    }
-    
-    // Height line (Y direction)
-    if (height > 0.01f) {
-        float x_offset = (start.x() < end.x()) ? std::min(start.x(), end.x()) - 0.5f : std::max(start.x(), end.x()) + 0.5f;
-        glVertex3f(x_offset, start.y(), center.z());
-        glVertex3f(x_offset, end.y(), center.z());
-        
-        // Tick marks
-        glVertex3f(x_offset - 0.2f, start.y(), center.z());
-        glVertex3f(x_offset + 0.2f, start.y(), center.z());
-        glVertex3f(x_offset - 0.2f, end.y(), center.z());
-        glVertex3f(x_offset + 0.2f, end.y(), center.z());
-    }
-    
-    // Depth line (Z direction) - only if significant depth
-    if (depth > 0.01f) {
-        float x_offset = std::max(start.x(), end.x()) + 0.5f;
-        float y_offset = std::max(start.y(), end.y()) + 0.5f;
-        glVertex3f(x_offset, y_offset, start.z());
-        glVertex3f(x_offset, y_offset, end.z());
-        
-        // Tick marks
-        glVertex3f(x_offset - 0.1f, y_offset, start.z());
-        glVertex3f(x_offset + 0.1f, y_offset, start.z());
-        glVertex3f(x_offset - 0.1f, y_offset, end.z());
-        glVertex3f(x_offset + 0.1f, y_offset, end.z());
-    }
-    
-    glEnd();
-    glLineWidth(1.0f);
-    m_gridShaderProgram->release();
-    
-    // Render text labels using QPainter overlay
-    QPainter painter(this);
-    painter.setRenderHint(QPainter::Antialiasing);
-    painter.setPen(QColor(255, 255, 0)); // Yellow text
-    painter.setFont(QFont("Arial", 10, QFont::Bold));
-    
-    // Width text
-    if (width > 0.01f) {
-        QVector3D labelPos = QVector3D(center.x(), (start.y() < end.y()) ? std::min(start.y(), end.y()) - 0.7f : std::max(start.y(), end.y()) + 0.7f, center.z());
-        QPoint screenPos = worldToScreen(labelPos);
-        if (screenPos.x() >= 0 && screenPos.y() >= 0) {
-            QString widthText = QString::number(width, 'f', 2);
-            painter.drawText(screenPos, widthText);
         }
     }
-    
-    // Height text
-    if (height > 0.01f) {
-        QVector3D labelPos = QVector3D((start.x() < end.x()) ? std::min(start.x(), end.x()) - 0.7f : std::max(start.x(), end.x()) + 0.7f, center.y(), center.z());
-        QPoint screenPos = worldToScreen(labelPos);
-        if (screenPos.x() >= 0 && screenPos.y() >= 0) {
-            QString heightText = QString::number(height, 'f', 2);
-            painter.drawText(screenPos, heightText);
-        }
-    }
-    
-    // Depth text
-    if (depth > 0.01f) {
-        QVector3D labelPos = QVector3D(std::max(start.x(), end.x()) + 0.7f, std::max(start.y(), end.y()) + 0.7f, center.z());
-        QPoint screenPos = worldToScreen(labelPos);
-        if (screenPos.x() >= 0 && screenPos.y() >= 0) {
-            QString depthText = QString::number(depth, 'f', 2);
-            painter.drawText(screenPos, depthText);
-        }
-    }
+    return closestVertex;
 }
 
-// NavigationCube implementation
-NavigationCube::NavigationCube(QWidget *parent)
-    : QWidget(parent), m_isHovered(false)
+QVector3D CADViewer::snapToEdge(const QVector3D& position, const QPoint& screenPos) const
 {
-    setFixedSize(80, 80);
-    setupFaces();
-    setAttribute(Qt::WA_Hover, true);
+    // Placeholder implementation
+    return position;
 }
 
-NavigationCube::~NavigationCube() = default;
-
-void NavigationCube::setupFaces()
+QVector3D CADViewer::snapToFace(const QVector3D& position, const QPoint& screenPos) const
 {
-    m_faceNames << "Front" << "Back" << "Left" << "Right" << "Top" << "Bottom";
-    
-    // Define face rectangles (simplified cube projection)
-    int size = 80;
-    int face = size / 3;
-    
-    m_faceRects["Front"] = QRect(face, face, face, face);
-    m_faceRects["Back"] = QRect(0, 0, face, face);
-    m_faceRects["Left"] = QRect(0, face, face, face);
-    m_faceRects["Right"] = QRect(face * 2, face, face, face);
-    m_faceRects["Top"] = QRect(face, 0, face, face);
-    m_faceRects["Bottom"] = QRect(face, face * 2, face, face);
+    // Placeholder implementation
+    return position;
 }
 
-void NavigationCube::paintEvent(QPaintEvent *event)
+QVector3D CADViewer::snapToCenter(const QVector3D& position) const
 {
-    Q_UNUSED(event)
-    
-    QPainter painter(this);
-    painter.setRenderHint(QPainter::Antialiasing);
-    
-    // Draw cube faces
-    painter.setPen(QPen(Qt::gray, 1));
-    
-    for (auto it = m_faceRects.begin(); it != m_faceRects.end(); ++it) {
-        const QString& faceName = it.key();
-        const QRect& rect = it.value();
+    QVector3D closestCenter = position;
+    float minDistance = 0.5f; // Snap within a certain radius
+
+    for (const auto& object : m_objects) {
+        Point3D min = object->getBoundingBoxMin();
+        Point3D max = object->getBoundingBoxMax();
+        QVector3D center((min.x + max.x) / 2, (min.y + max.y) / 2, (min.z + max.z) / 2);
         
-        QColor faceColor = (faceName == m_hoveredFace) ? QColor(100, 150, 255) : QColor(70, 70, 70);
-        painter.fillRect(rect, faceColor);
-        painter.drawRect(rect);
-        
-        // Draw face label
-        painter.setPen(Qt::white);
-        painter.drawText(rect, Qt::AlignCenter, faceName.left(1));
-    }
-}
-
-void NavigationCube::mousePressEvent(QMouseEvent *event)
-{
-    QString face = getFaceFromPosition(event->pos());
-    if (!face.isEmpty()) {
-        emit viewChanged(face);
-    }
-}
-
-void NavigationCube::enterEvent(QEnterEvent *event)
-{
-    Q_UNUSED(event)
-    m_isHovered = true;
-    update();
-}
-
-void NavigationCube::leaveEvent(QEvent *event)
-{
-    Q_UNUSED(event)
-    m_isHovered = false;
-    m_hoveredFace.clear();
-    update();
-}
-
-QString NavigationCube::getFaceFromPosition(const QPoint& pos)
-{
-    for (auto it = m_faceRects.begin(); it != m_faceRects.end(); ++it) {
-        if (it.value().contains(pos)) {
-            m_hoveredFace = it.key();
-            update();
-            return it.key();
+        float distance = position.distanceToPoint(center);
+        if (distance < minDistance) {
+            minDistance = distance;
+            closestCenter = center;
         }
     }
-    return QString();
+    return closestCenter;
 }
 
-} // namespace HybridCAD 
+QVector3D CADViewer::snapToMidpoint(const QVector3D& position) const
+{
+    // Placeholder implementation
+    return position;
+}
+
+QVector3D CADViewer::closestPointOnLine(const QVector3D& point, const QVector3D& lineStart, const QVector3D& lineEnd) const
+{
+    QVector3D lineDir = (lineEnd - lineStart).normalized();
+    float t = QVector3D::dotProduct(point - lineStart, lineDir);
+    return lineStart + t * lineDir;
+}
+
+void CADViewer::loadKeyBindings()
+{
+    m_settings->beginGroup("KeyBindings");
+    for (auto it = m_keyBindings.begin(); it != m_keyBindings.end(); ++it) {
+        QVariant value = m_settings->value(QString::number(static_cast<int>(it.key())));
+        if (value.isValid()) {
+            it.value() = QKeySequence(value.toString());
+        }
+    }
+    m_settings->endGroup();
+}
+
+void CADViewer::saveKeyBindings()
+{
+    m_settings->beginGroup("KeyBindings");
+    for (auto it = m_keyBindings.begin(); it != m_keyBindings.end(); ++it) {
+        m_settings->setValue(QString::number(static_cast<int>(it.key())), it.value().toString());
+    }
+    m_settings->endGroup();
+}
+
+void CADViewer::setKeyBinding(KeyAction action, const QKeySequence& keySequence)
+{
+    m_keyBindings[action] = keySequence;
+}
+
+QKeySequence CADViewer::getKeyBinding(KeyAction action) const
+{
+    return m_keyBindings.value(action);
+}
+
+QMap<KeyAction, QKeySequence> CADViewer::getDefaultKeyBindings() const
+{
+    QMap<KeyAction, QKeySequence> defaults;
+    defaults[KeyAction::TOGGLE_GRID] = QKeySequence(Qt::Key_G);
+    defaults[KeyAction::TOGGLE_WIREFRAME] = QKeySequence(Qt::Key_Z);
+    defaults[KeyAction::TOGGLE_AXES] = QKeySequence(Qt::Key_X);
+    defaults[KeyAction::RESET_VIEW] = QKeySequence(Qt::Key_Home);
+    defaults[KeyAction::FRONT_VIEW] = QKeySequence(Qt::Key_1);
+    defaults[KeyAction::BACK_VIEW] = QKeySequence(Qt::CTRL | Qt::Key_1);
+    defaults[KeyAction::LEFT_VIEW] = QKeySequence(Qt::Key_3);
+    defaults[KeyAction::RIGHT_VIEW] = QKeySequence(Qt::CTRL | Qt::Key_3);
+    defaults[KeyAction::TOP_VIEW] = QKeySequence(Qt::Key_7);
+    defaults[KeyAction::BOTTOM_VIEW] = QKeySequence(Qt::CTRL | Qt::Key_7);
+    defaults[KeyAction::ISOMETRIC_VIEW] = QKeySequence(Qt::Key_9);
+    defaults[KeyAction::DELETE_SELECTED] = QKeySequence(Qt::Key_Delete);
+    defaults[KeyAction::SELECT_ALL] = QKeySequence(Qt::CTRL | Qt::Key_A);
+    defaults[KeyAction::DESELECT_ALL] = QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_A);
+    defaults[KeyAction::PLACE_SHAPE] = QKeySequence(Qt::Key_P);
+    defaults[KeyAction::SKETCH_LINE] = QKeySequence(Qt::Key_L);
+    defaults[KeyAction::SKETCH_RECTANGLE] = QKeySequence(Qt::Key_R);
+    defaults[KeyAction::SKETCH_CIRCLE] = QKeySequence(Qt::Key_C);
+    defaults[KeyAction::CANCEL_CURRENT_ACTION] = QKeySequence(Qt::Key_Escape);
+    return defaults;
+}
+
+} // namespace HybridCAD
