@@ -2032,16 +2032,30 @@ bool CADViewer::objectContainsObject(CADObjectPtr outer, CADObjectPtr inner)
 void CADViewer::renderPlacementPreview()
 {
     if (m_placementState != PlacementState::WAITING_FOR_SECOND_CLICK) return;
-    
+
     CADObjectPtr previewObject = createShapeAtPoints(m_shapeToPlace, m_placementStartPoint, m_placementEndPoint);
-    if (previewObject) {
-        if (m_activeTool == ActiveTool::ERASER) {
-            Material mat;
-            mat.diffuseColor = QColor(255, 0, 0, 100); // Red transparent for eraser
-            previewObject->setMaterial(mat);
-        }
-        previewObject->render();
-    }
+    if (!previewObject) return;
+
+    // Make the preview object semi-transparent
+    Material mat = previewObject->getMaterial();
+    mat.transparency = 0.7f;
+    previewObject->setMaterial(mat);
+
+    // Render the preview
+    m_shaderProgram->bind();
+    m_shaderProgram->setUniformValue("model", m_modelMatrix);
+    m_shaderProgram->setUniformValue("view", m_viewMatrix);
+    m_shaderProgram->setUniformValue("projection", m_projectionMatrix);
+    m_shaderProgram->setUniformValue("lightPos", QVector3D(5.0f, 5.0f, 5.0f));
+    m_shaderProgram->setUniformValue("viewPos", m_cameraPosition);
+    m_shaderProgram->setUniformValue("lightColor", QVector3D(1.0f, 1.0f, 1.0f));
+    
+    QVector4D color(mat.diffuseColor.redF(), mat.diffuseColor.greenF(), mat.diffuseColor.blueF(), 1.0f - mat.transparency);
+    m_shaderProgram->setUniformValue("objectColor", color);
+    
+    previewObject->render();
+    
+    m_shaderProgram->release();
 }
 
 void CADViewer::renderExtrusionPreview()

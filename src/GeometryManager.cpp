@@ -285,10 +285,10 @@ void Cone::render() const {
         float z2_top = m_topRadius * sin(angle2);
         
         // Side face
-        glVertex3f(x1_bottom, -m_height/2, z1_bottom);
-        glVertex3f(x2_bottom, -m_height/2, z2_bottom);
-        glVertex3f(x2_top, m_height/2, z2_top);
-        glVertex3f(x1_top, m_height/2, z1_top);
+        glVertex3f(m_center.x + x1_bottom, m_center.y -m_height/2, m_center.z + z1_bottom);
+        glVertex3f(m_center.x + x2_bottom, m_center.y -m_height/2, m_center.z + z2_bottom);
+        glVertex3f(m_center.x + x2_top, m_center.y + m_height/2, m_center.z + z2_top);
+        glVertex3f(m_center.x + x1_top, m_center.y + m_height/2, m_center.z + z1_top);
     }
     glEnd();
 }
@@ -296,10 +296,10 @@ void Cone::render() const {
 bool Cone::intersects(const Point3D& rayOrigin, const Vector3D& rayDirection) const {
     // Basic cone intersection test
     float maxRadius = std::max(m_bottomRadius, m_topRadius);
-    float dx = rayOrigin.x;
-    float dz = rayOrigin.z;
+    float dx = rayOrigin.x - m_center.x;
+    float dz = rayOrigin.z - m_center.z;
     return (dx*dx + dz*dz <= maxRadius*maxRadius &&
-            rayOrigin.y >= -m_height/2 && rayOrigin.y <= m_height/2);
+            rayOrigin.y >= m_center.y -m_height/2 && rayOrigin.y <= m_center.y + m_height/2);
 }
 
 void Cone::generateMesh() {

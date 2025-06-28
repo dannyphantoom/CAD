@@ -105,20 +105,23 @@ public:
     void render() const override;
     bool intersects(const Point3D& rayOrigin, const Vector3D& rayDirection) const override;
     void generateMesh() override;
-    Point3D getBoundingBoxMin() const override { float maxRadius = std::max(m_bottomRadius, m_topRadius); return Point3D(-maxRadius, -m_height/2, -maxRadius); }
-    Point3D getBoundingBoxMax() const override { float maxRadius = std::max(m_bottomRadius, m_topRadius); return Point3D(maxRadius, m_height/2, maxRadius); }
+    Point3D getBoundingBoxMin() const override { float maxRadius = std::max(m_bottomRadius, m_topRadius); return Point3D(m_center.x - maxRadius, m_center.y - m_height/2, m_center.z - maxRadius); }
+    Point3D getBoundingBoxMax() const override { float maxRadius = std::max(m_bottomRadius, m_topRadius); return Point3D(m_center.x + maxRadius, m_center.y + m_height/2, m_center.z + maxRadius); }
     
     void setParameters(float bottomRadius, float topRadius, float height, int segments);
     float getBottomRadius() const { return m_bottomRadius; }
     float getTopRadius() const { return m_topRadius; }
     float getHeight() const { return m_height; }
     int getSegments() const { return m_segments; }
+    void setCenter(const Point3D& center) { m_center = center; }
+    Point3D getCenter() const { return m_center; }
 
 private:
     float m_bottomRadius;
     float m_topRadius;
     float m_height;
     int m_segments;
+    Point3D m_center;
 };
 
 // Boolean operation result
